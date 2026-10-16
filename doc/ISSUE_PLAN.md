@@ -320,29 +320,39 @@ fue desarrollada, probada y validada.
 - Los fallos se investigan en lugar de ocultarse o eliminarse.
 - El informe final incluye el resultado real de aprobado/fallido.
 
-### ISSUE-09 — Verificar la evidencia de revisión y entrega del proyecto
+### ISSUE-09 — Documentar el proyecto en un README.md
 
-**Tipo:** Proceso y entrega  
-**Responsable sugerido:** Student C, con todos los estudiantes  
+**Tipo:** Documentación  
+**Responsable sugerido:** Student C  
 **Depende de:** ISSUE-01 a ISSUE-08
 
-**Objetivo:** Comprobar que el repositorio reúne la evidencia de revisión
-exigida antes de la revisión humana.
+**Objetivo:** Dejar el repositorio autoexplicativo con un `README.md`
+completo y verificable.
 
 **Alcance:**
 
-- Verificar que cada issue tenga revisor y QA, con rama, commits y pull
-  request identificables.
-- Confirmar que las pruebas automatizadas de cada historia quedaron
-  registradas.
-- El AI Development Log y el material de presentación se gestionan fuera de
-  este plan.
+- Redactar o mejorar el `README.md` del repositorio: descripción del
+  proyecto.
+- Documentar cómo instalarlo y ejecutarlo (requisitos, configuración,
+  migraciones, servidor de desarrollo).
+- Documentar las historias de usuario implementadas (las tres obligatorias y
+  las dos adicionales) y cómo probarlas.
+- Añadir una guía de uso básico para los flujos principales (reserva,
+  calendario, cancelación, previsión).
+- Incluir cualquier configuración necesaria (base de datos, variables,
+  Admin).
 
 **Criterios de aceptación:**
 
-- Cada issue tiene evidencia de revisión y QA asociada.
-- Las ramas, commits y pull requests de cada issue son identificables.
-- Ningún estudiante aprueba ni fusiona su propio pull request.
+- El `README.md` contiene descripción, instalación, ejecución, HU
+  implementadas, guía de uso y configuración.
+- Los pasos de instalación y ejecución son verificables en una configuración
+  local limpia siguiendo solo el README.
+- Cada una de las cinco historias de usuario aparece documentada con su forma
+  de probarla.
+- La guía de uso coincide con el comportamiento real de la aplicación.
+- No hay pasos obsoletos ni instrucciones que dependan de conocimiento
+  externo al repositorio.
 
 ## 4. Distribución sugerida entre tres estudiantes
 
@@ -354,7 +364,7 @@ necesidad de revisión y QA por parte de otro estudiante.
 |---|---|---|
 | Student A | ISSUE-01, ISSUE-02, ISSUE-07 | Fundación backend y reglas de reserva |
 | Student B | ISSUE-03, ISSUE-04, ISSUE-08 | Flujo de usuario, calendario y tests automatizados |
-| Student C | ISSUE-05, ISSUE-06, ISSUE-09 | Previsión, autogestión y verificación de entrega |
+| Student C | ISSUE-05, ISSUE-06, ISSUE-09 | Previsión, autogestión y documentación |
 
 ### Rotación de roles
 

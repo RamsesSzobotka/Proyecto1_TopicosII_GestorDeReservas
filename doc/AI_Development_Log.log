@@ -1,0 +1,14 @@
+# AI Development Log — Proyecto GestorDeReservas (Tópicos Especiales II)
+# Propósito: registro del uso significativo de herramientas de IA durante el proyecto.
+# No es necesario registrar cada prompt, solo los que afectaron significativamente el desarrollo.
+# Formato de cada entrada (5 campos separados por |, en orden cronológico):
+# Actividad | Herramienta IA | Qué se solicitó | Resultado | Decisión humana (aceptada / modificada / rechazada)
+#
+# -------- EJEMPLO (no es un registro real) --------
+# Arquitectura | Herramienta A | Analizar arquitectura | Propuso 3 capas | Aceptada parcialmente
+# Código | Herramienta B | Crear endpoint | Código generado | Modificada
+# ---------------------------------------------------
+# FIN EJEMPLO
+#
+# Nuevas entradas debajo de esta línea, en orden cronológico (una línea por entrada):
+
