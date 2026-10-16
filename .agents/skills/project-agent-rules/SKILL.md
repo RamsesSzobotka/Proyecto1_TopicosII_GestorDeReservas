@@ -52,6 +52,14 @@ Before changing anything:
 
 ## 3. Commits
 
+- Ask the user for explicit permission immediately before creating any commit.
+  Do not treat a general request to implement code as permission to commit.
+- Ask the user for explicit permission immediately before pushing, uploading,
+  or otherwise sending commits or branches to a remote Git repository.
+- Ask the user for explicit permission immediately before creating, publishing,
+  updating, or submitting a pull request.
+- Ask again if the planned operation changes materially, such as switching
+  branches, remotes, commits, or pull-request targets.
 - Keep commits small, descriptive, and limited to the issue.
 - Include the issue identifier, for example:
   `fix: correct date availability (#124)`.
@@ -60,6 +68,11 @@ Before changing anything:
 - Do not rewrite history with destructive operations without authorization.
 - Do not include changes unrelated to the task.
 - Do not claim that something was saved in Git without verifying it.
+
+Permission must be requested through the user interaction mechanism before the
+operation is executed. The agent may inspect status, diffs, history, branches,
+and remotes without permission, but inspection is not permission to modify local
+Git history or communicate with a remote.
 
 ## 4. Testing and Validation
 
@@ -138,6 +151,10 @@ Each entry must include:
   AI errors.
 
 ## 8. Pull Request Required
+
+Request explicit user permission before creating or updating the pull request.
+Preparing a draft, title, description, or local branch does not replace this
+permission.
 
 Create the pull request from the working branch into the agreed base branch. It
 must include:

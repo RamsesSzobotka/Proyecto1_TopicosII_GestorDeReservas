@@ -11,6 +11,12 @@ These instructions apply to every agent task in this repository.
 - Work from an issue-approved branch; never work directly on `main` or `develop`.
 - Keep changes scoped, avoid unapproved features, and do not modify other
   contributors' work.
+- Ask the user for explicit permission immediately before creating commits.
+- Ask the user for explicit permission immediately before pushing or uploading
+  anything to a remote Git repository.
+- Ask the user for explicit permission immediately before creating or updating
+  a pull request. A request to implement code is not permission for any of
+  these operations.
 - Never commit secrets, credentials, private keys, temporary files, or sensitive
   configuration.
 - Run relevant tests and quality checks, record real results, and never claim
