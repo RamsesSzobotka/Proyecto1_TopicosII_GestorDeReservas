@@ -17,10 +17,8 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path, include
-from reservas import views  # Importamos las vistas de la app
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('', views.home, name='home'),  # Página principal
-    path('', include('reservas.urls')),  # Rutas de la app reservas
+    path('', include('reservas.urls')),  # Rutas de la app reservas (incluye home en '')
 ]

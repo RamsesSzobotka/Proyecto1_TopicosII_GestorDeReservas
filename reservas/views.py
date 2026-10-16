@@ -1,14 +1,16 @@
 import json
-from datetime import datetime, timedelta, time
+from datetime import timedelta, time
+from django.db import transaction
+from django.core.exceptions import ValidationError
 from django.shortcuts import render, get_object_or_404, redirect
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
 from django.utils.dateformat import format as date_format
 from django.utils.dateparse import parse_datetime
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from .models import Resource, Booking, Availability
-from .models import Resource
 
 
 # Horario por defecto (si no hay Availability definida)
@@ -22,7 +24,7 @@ def calendario(request, resource_id):
     """
     resource = get_object_or_404(Resource, id=resource_id)
 
-    hoy = datetime.today()
+    hoy = timezone.now()
     inicio_semana = hoy - timedelta(days=hoy.weekday())  # Lunes
     dias_semana = [inicio_semana + timedelta(days=i) for i in range(7)]
 
@@ -50,7 +52,7 @@ def calendario_navegable(request, resource_id):
     """
     resource = get_object_or_404(Resource, id=resource_id)
 
-    hoy = datetime.today()
+    hoy = timezone.now()
     delta = 0
     if request.GET.get('week') == 'prev':
         delta = -7
@@ -121,36 +123,70 @@ def api_crear_reserva(request):
     """
     Endpoint para crear una nueva reserva, con soporte para repeticiones semanales.
     """
-    if request.method == 'POST':
-        if not request.user.is_authenticated:
-            return JsonResponse({'success': False, 'error': 'Debes iniciar sesión para reservar.'}, status=403)
-        try:
-            data = json.loads(request.body)
-            resource_id = data.get('resource_id')
-            start_time = parse_datetime(data.get('start_time'))
-            end_time = parse_datetime(data.get('end_time'))
-            repeat_weeks = int(data.get('repeat_weeks', 0))
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Método no permitido'}, status=405)
+    if not request.user.is_authenticated:
+        return JsonResponse({'success': False, 'error': 'Debes iniciar sesión para reservar.'}, status=403)
 
-            reservas_creadas = []
+    try:
+        data = json.loads(request.body)
+    except ValueError:
+        return JsonResponse({'success': False, 'error': 'El cuerpo de la petición no es JSON válido.'}, status=400)
 
-            for i in range(repeat_weeks + 1):
-                start = start_time + timedelta(weeks=i)
-                end = end_time + timedelta(weeks=i)
+    resource_id = data.get('resource_id')
+    if not resource_id:
+        return JsonResponse({'success': False, 'error': 'Falta el parámetro resource_id.'}, status=400)
+    try:
+        resource = Resource.objects.get(pk=resource_id)
+    except (Resource.DoesNotExist, ValueError, TypeError):
+        return JsonResponse({'success': False, 'error': 'El recurso indicado no existe.'}, status=404)
 
-                overlapping = Booking.objects.filter(
-                    resource_id=resource_id,
-                    start_time__lt=end,
-                    end_time__gt=start
-                )
-                if overlapping.exists():
-                    return JsonResponse({
-                        'success': False,
-                        'error': f'Conflicto: hay una reserva en la semana {i + 1} ({start}).'
-                    })
+    start_time = parse_datetime(str(data.get('start_time') or ''))
+    end_time = parse_datetime(str(data.get('end_time') or ''))
+    if start_time is None or end_time is None:
+        return JsonResponse({
+            'success': False,
+            'error': 'start_time y end_time deben ser fechas ISO 8601 válidas.'
+        }, status=400)
+    if start_time >= end_time:
+        return JsonResponse({
+            'success': False,
+            'error': 'start_time debe ser anterior a end_time.'
+        }, status=400)
 
-                booking = Booking.objects.create(
+    try:
+        repeat_weeks = int(data.get('repeat_weeks', 0))
+    except (ValueError, TypeError):
+        return JsonResponse({'success': False, 'error': 'repeat_weeks debe ser un número entero.'}, status=400)
+    if not 0 <= repeat_weeks <= 52:
+        return JsonResponse({'success': False, 'error': 'repeat_weeks debe estar entre 0 y 52.'}, status=400)
+
+    # Validamos todas las semanas antes de escribir nada: bloqueos y reservas existentes.
+    semanas = []
+    for i in range(repeat_weeks + 1):
+        start = start_time + timedelta(weeks=i)
+        end = end_time + timedelta(weeks=i)
+        semanas.append((start, end))
+
+        if Availability.objects.filter(resource=resource, start_time__lt=end, end_time__gt=start).exists():
+            return JsonResponse({
+                'success': False,
+                'error': f'Conflicto: hay un bloqueo en la semana {i + 1} ({start}).'
+            }, status=409)
+        if Booking.objects.filter(resource=resource, start_time__lt=end, end_time__gt=start).exists():
+            return JsonResponse({
+                'success': False,
+                'error': f'Conflicto: hay una reserva en la semana {i + 1} ({start}).'
+            }, status=409)
+
+    # Creación todo-o-nada: si una semana falla, no se guarda ninguna.
+    reservas_creadas = []
+    try:
+        with transaction.atomic():
+            for start, end in semanas:
+                Booking.objects.create(
                     user=request.user,
-                    resource_id=resource_id,
+                    resource=resource,
                     start_time=start,
                     end_time=end
                 )
@@ -158,11 +194,10 @@ def api_crear_reserva(request):
                     'start': start.isoformat(),
                     'end': end.isoformat()
                 })
+    except (ValueError, ValidationError, Booking.DoesNotExist) as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=400)
 
-            return JsonResponse({'success': True, 'reservas': reservas_creadas})
-        except Exception as e:
-            return JsonResponse({'success': False, 'error': str(e)})
-    return JsonResponse({'success': False, 'error': 'Método no permitido'}, status=405)
+    return JsonResponse({'success': True, 'reservas': reservas_creadas})
 
 
 def login_view(request):
