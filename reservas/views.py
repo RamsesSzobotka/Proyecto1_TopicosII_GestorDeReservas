@@ -1,14 +1,14 @@
 import json
-from datetime import datetime, timedelta, time
+from datetime import timedelta, time
 from django.shortcuts import render, get_object_or_404, redirect
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
 from django.utils.dateformat import format as date_format
 from django.utils.dateparse import parse_datetime
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from .models import Resource, Booking, Availability
-from .models import Resource
 
 
 # Horario por defecto (si no hay Availability definida)
@@ -22,7 +22,7 @@ def calendario(request, resource_id):
     """
     resource = get_object_or_404(Resource, id=resource_id)
 
-    hoy = datetime.today()
+    hoy = timezone.now()
     inicio_semana = hoy - timedelta(days=hoy.weekday())  # Lunes
     dias_semana = [inicio_semana + timedelta(days=i) for i in range(7)]
 
@@ -50,7 +50,7 @@ def calendario_navegable(request, resource_id):
     """
     resource = get_object_or_404(Resource, id=resource_id)
 
-    hoy = datetime.today()
+    hoy = timezone.now()
     delta = 0
     if request.GET.get('week') == 'prev':
         delta = -7
