@@ -1,10 +1,10 @@
 import json
 from datetime import timedelta, time
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.core.exceptions import ValidationError
 from django.shortcuts import render, get_object_or_404, redirect
 from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils import timezone
 from django.utils.dateformat import format as date_format
 from django.utils.dateparse import parse_datetime
@@ -80,6 +80,7 @@ def calendario_navegable(request, resource_id):
     })
 
 
+@ensure_csrf_cookie
 def calendario_full(request, resource_id):
     """
     Calendario interactivo con FullCalendar.
@@ -118,10 +119,18 @@ def calendario_full(request, resource_id):
 
 
 
-@csrf_exempt
 def api_crear_reserva(request):
     """
     Endpoint para crear una nueva reserva, con soporte para repeticiones semanales.
+
+    Protegido por CSRF: el cliente debe enviar el header X-CSRFToken con el valor
+    de la cookie csrftoken (la emite la vista calendario_full vía ensure_csrf_cookie).
+
+    Respuesta exitosa (200): {"success": True, "reservas": [{"start": ISO8601, "end": ISO8601}, ...]}
+    con una entrada por ocurrencia creada (repeat_weeks + 1 en total).
+
+    Errores: 400 (JSON/datetime/intervalo/petición inválidos), 403 (sin sesión o CSRF),
+    404 (recurso inexistente), 405 (método), 409 (solape con reserva o bloqueo).
     """
     if request.method != 'POST':
         return JsonResponse({'success': False, 'error': 'Método no permitido'}, status=405)
@@ -132,6 +141,8 @@ def api_crear_reserva(request):
         data = json.loads(request.body)
     except ValueError:
         return JsonResponse({'success': False, 'error': 'El cuerpo de la petición no es JSON válido.'}, status=400)
+    if not isinstance(data, dict):
+        return JsonResponse({'success': False, 'error': 'El cuerpo JSON debe ser un objeto.'}, status=400)
 
     resource_id = data.get('resource_id')
     if not resource_id:
@@ -148,6 +159,13 @@ def api_crear_reserva(request):
             'success': False,
             'error': 'start_time y end_time deben ser fechas ISO 8601 válidas.'
         }, status=400)
+    # Con USE_TZ=True rechazamos datetimes sin offset: compararlos con los
+    # almacenados (aware) lanza TypeError y Django los interpretaría como UTC.
+    if start_time.tzinfo is None or end_time.tzinfo is None:
+        return JsonResponse({
+            'success': False,
+            'error': 'start_time y end_time deben incluir la zona horaria (offset), p. ej. 2026-10-20T10:00:00-05:00.'
+        }, status=400)
     if start_time >= end_time:
         return JsonResponse({
             'success': False,
@@ -161,28 +179,29 @@ def api_crear_reserva(request):
     if not 0 <= repeat_weeks <= 52:
         return JsonResponse({'success': False, 'error': 'repeat_weeks debe estar entre 0 y 52.'}, status=400)
 
-    # Validamos todas las semanas antes de escribir nada: bloqueos y reservas existentes.
-    semanas = []
-    for i in range(repeat_weeks + 1):
-        start = start_time + timedelta(weeks=i)
-        end = end_time + timedelta(weeks=i)
-        semanas.append((start, end))
+    semanas = [
+        (start_time + timedelta(weeks=i), end_time + timedelta(weeks=i))
+        for i in range(repeat_weeks + 1)
+    ]
 
-        if Availability.objects.filter(resource=resource, start_time__lt=end, end_time__gt=start).exists():
-            return JsonResponse({
-                'success': False,
-                'error': f'Conflicto: hay un bloqueo en la semana {i + 1} ({start}).'
-            }, status=409)
-        if Booking.objects.filter(resource=resource, start_time__lt=end, end_time__gt=start).exists():
-            return JsonResponse({
-                'success': False,
-                'error': f'Conflicto: hay una reserva en la semana {i + 1} ({start}).'
-            }, status=409)
-
-    # Creación todo-o-nada: si una semana falla, no se guarda ninguna.
+    # Todo-o-nada: chequeos de conflicto y creación dentro de la misma
+    # transacción. IntegrityError (carrera concurrente sobre unique_together)
+    # se traduce a 409 y revierte la serie completa.
     reservas_creadas = []
     try:
         with transaction.atomic():
+            for i, (start, end) in enumerate(semanas):
+                if Availability.objects.filter(resource=resource, start_time__lt=end, end_time__gt=start).exists():
+                    return JsonResponse({
+                        'success': False,
+                        'error': f'Conflicto: hay un bloqueo en la semana {i + 1} ({start}).'
+                    }, status=409)
+                if Booking.objects.filter(resource=resource, start_time__lt=end, end_time__gt=start).exists():
+                    return JsonResponse({
+                        'success': False,
+                        'error': f'Conflicto: hay una reserva en la semana {i + 1} ({start}).'
+                    }, status=409)
+
             for start, end in semanas:
                 Booking.objects.create(
                     user=request.user,
@@ -194,7 +213,9 @@ def api_crear_reserva(request):
                     'start': start.isoformat(),
                     'end': end.isoformat()
                 })
-    except (ValueError, ValidationError, Booking.DoesNotExist) as e:
+    except IntegrityError:
+        return JsonResponse({'success': False, 'error': 'Conflicto: la reserva ya existe.'}, status=409)
+    except (ValueError, ValidationError) as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=400)
 
     return JsonResponse({'success': True, 'reservas': reservas_creadas})
