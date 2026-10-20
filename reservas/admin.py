@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from .models import Resource, Availability, Booking
 
 # --- CONFIGURACIÓN DEL PANEL ADMIN ---
@@ -16,6 +16,22 @@ class AvailabilityAdmin(admin.ModelAdmin):
     search_fields = ('resource__name',)
     verbose_name = 'Bloqueo'
     verbose_name_plural = 'Bloqueos'
+
+    def save_model(self, request, obj, form, change):
+        """
+        Avisa al admin cuando el bloque se solapa con reservas existentes.
+        La política es que la reserva existente gana: el bloqueo se guarda y las
+        reservas no se tocan.
+        """
+        super().save_model(request, obj, form, change)
+        solapadas = getattr(obj, 'reservas_solapadas', 0)
+        if solapadas:
+            self.message_user(
+                request,
+                f"El bloqueo se guardó, pero se solapa con {solapadas} reserva(s) existente(s). "
+                "Las reservas se mantienen y el bloqueo solo impide reservas nuevas.",
+                level=messages.WARNING,
+            )
 
 
 @admin.register(Booking)
