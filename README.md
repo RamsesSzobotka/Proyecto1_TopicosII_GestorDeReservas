@@ -82,3 +82,22 @@ Selecciona un bloque de tiempo disponible para hacer una reserva.
 El sistema valida solapamientos y bloqueos.
 
 Se pueden crear reservas recurrentes (pregunta cuántas semanas repetir).
+
+## Política de bloques administrativos
+
+Los **bloqueos** son intervalos que el administrador crea desde el panel de administración
+(`/admin/reservas/availability/`) para dejar un recurso indisponible.
+
+- **Intervalo inválido:** un bloqueo debe terminar después de empezar (`end_time > start_time`).
+  Los bloques invertidos o de duración cero se rechazan al guardar.
+- **Reservas existentes (la reserva gana):** se puede guardar un bloque que se solape con
+  reservas ya creadas. Las reservas existentes **no se modifican ni se cancelan**; el bloqueo
+  solo impide **nuevas** reservas en esa franja. El panel avisa de cuántas reservas quedan
+  solapadas al guardar el bloque.
+- **Edición de un bloque:** se aplica la misma regla. Si se acorta o se mueve, las reservas
+  que quedan fuera del nuevo intervalo se mantienen intactas.
+- **Eliminación de un bloque:** al borrarlo solo desaparece el bloqueo. Las reservas que se
+  solapaban con él **se conservan**.
+- **Crear una reserva sobre un bloqueo:** el panel de administración rechaza la reserva y la
+  API responde `409 Conflict` con el detalle del conflicto. El servidor es la autoridad: la
+  comprobación del calendario en el navegador es solo una ayuda visual.
