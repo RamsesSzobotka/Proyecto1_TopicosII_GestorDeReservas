@@ -1,4 +1,5 @@
 import json
+import uuid
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 
 from django.contrib.auth.models import Permission, User
@@ -639,3 +640,422 @@ class PrevisionDemandaTests(TestCase):
         self.client.get(self.URL)
         despues = (Booking.objects.count(), Resource.objects.count(), Availability.objects.count())
         self.assertEqual(antes, despues)
+
+
+class CancelacionBase(TestCase):
+    """Utilidades comunes del issue #6 (autogestión y cancelación)."""
+
+    def setUp(self):
+        self.dueno = User.objects.create_user(username="dueno", password="pass1234")
+        self.otro = User.objects.create_user(username="otro", password="pass1234")
+        self.staff = User.objects.create_user(username="admin6", password="pass1234", is_staff=True)
+        self.pista = Resource.objects.create(name="Pista 6")
+
+    def reserva(self, desde_ahora, usuario=None, horas=1, recurso=None, serie=None):
+        inicio = timezone.now() + desde_ahora
+        return Booking.objects.create(
+            user=usuario or self.dueno, resource=recurso or self.pista,
+            start_time=inicio, end_time=inicio + timedelta(hours=horas), serie=serie,
+        )
+
+    def cancelar(self, reserva_pk, alcance="una", cliente=None):
+        cliente = cliente or self.client
+        datos = {} if alcance is None else {"alcance": alcance}
+        return cliente.post(f"/reservas/{reserva_pk}/cancelar/", datos)
+
+    def mensajes(self, response):
+        return [str(m) for m in get_messages(response.wsgi_request)]
+
+
+class CancelacionPropiedadTests(CancelacionBase):
+    def test_otro_usuario_recibe_404_y_la_reserva_sigue_activa(self):
+        r = self.reserva(timedelta(days=3))
+        self.client.force_login(self.otro)
+        response = self.cancelar(r.pk)
+        self.assertEqual(response.status_code, 404)
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.ACTIVA)
+
+    def test_reserva_ajena_e_inexistente_dan_la_misma_respuesta(self):
+        r = self.reserva(timedelta(days=3))
+        self.client.force_login(self.otro)
+        ajena = self.cancelar(r.pk)
+        inexistente = self.cancelar(999999)
+        self.assertEqual(ajena.status_code, 404)
+        self.assertEqual(inexistente.status_code, 404)
+        self.assertEqual(ajena.content, inexistente.content)
+
+    def test_id_no_numerico_no_resuelve(self):
+        self.client.force_login(self.dueno)
+        self.assertEqual(self.client.post("/reservas/abc/cancelar/").status_code, 404)
+
+    def test_el_propietario_cancela_y_queda_registro(self):
+        r = self.reserva(timedelta(days=3))
+        self.client.force_login(self.dueno)
+        response = self.cancelar(r.pk)
+        self.assertRedirects(response, "/mis-reservas/")
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.CANCELADA)
+        self.assertEqual(r.cancelada_por, self.dueno)
+        self.assertIsNotNone(r.cancelada_en)
+        self.assertEqual(Booking.objects.filter(pk=r.pk).count(), 1)  # cancelación lógica
+
+    def test_staff_cancela_reserva_ajena(self):
+        r = self.reserva(timedelta(days=3))
+        self.client.force_login(self.staff)
+        self.cancelar(r.pk)
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.CANCELADA)
+        self.assertEqual(r.cancelada_por, self.staff)
+
+    def test_mis_reservas_solo_muestra_las_propias(self):
+        propia = self.reserva(timedelta(days=3))
+        ajena = self.reserva(timedelta(days=4), usuario=self.otro, recurso=Resource.objects.create(name="Sala ajena"))
+        self.client.force_login(self.dueno)
+        response = self.client.get("/mis-reservas/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.pista.name)
+        self.assertNotContains(response, "Sala ajena")
+        self.assertNotContains(response, f"/reservas/{ajena.pk}/cancelar/")
+        self.assertContains(response, f"/reservas/{propia.pk}/cancelar/")
+
+    def test_staff_en_mis_reservas_ve_solo_las_suyas(self):
+        self.reserva(timedelta(days=3))
+        self.client.force_login(self.staff)
+        self.assertNotContains(self.client.get("/mis-reservas/"), self.pista.name)
+
+
+class CancelacionAccesoTests(CancelacionBase):
+    def test_get_devuelve_405_sin_cancelar(self):
+        r = self.reserva(timedelta(days=3))
+        self.client.force_login(self.dueno)
+        self.assertEqual(self.client.get(f"/reservas/{r.pk}/cancelar/").status_code, 405)
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.ACTIVA)
+
+    def test_anonimo_va_al_login_y_no_cancela(self):
+        r = self.reserva(timedelta(days=3))
+        response = self.cancelar(r.pk)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/login/"))
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.ACTIVA)
+
+    def test_mis_reservas_anonimo_redirige_al_login(self):
+        response = self.client.get("/mis-reservas/")
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/login/"))
+
+    def test_cancelar_exige_csrf(self):
+        r = self.reserva(timedelta(days=3))
+        cliente = Client(enforce_csrf_checks=True)
+        cliente.force_login(self.dueno)
+        response = cliente.post(f"/reservas/{r.pk}/cancelar/", {"alcance": "una"})
+        self.assertEqual(response.status_code, 403)
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.ACTIVA)
+
+    def test_la_pagina_incluye_el_token_csrf_en_el_formulario(self):
+        self.reserva(timedelta(days=3))
+        self.client.force_login(self.dueno)
+        self.assertContains(self.client.get("/mis-reservas/"), "csrfmiddlewaretoken")
+
+    def test_alcance_invalido_no_cancela(self):
+        r = self.reserva(timedelta(days=3))
+        self.client.force_login(self.dueno)
+        response = self.cancelar(r.pk, alcance="todas")
+        self.assertRedirects(response, "/mis-reservas/")
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.ACTIVA)
+
+
+class CancelacionLimiteTests(CancelacionBase):
+    def test_cliente_dentro_del_limite_si_puede(self):
+        r = self.reserva(timedelta(hours=2, minutes=5))
+        self.client.force_login(self.dueno)
+        self.cancelar(r.pk)
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.CANCELADA)
+
+    def test_cliente_fuera_del_limite_no_puede_y_se_le_explica(self):
+        r = self.reserva(timedelta(hours=1, minutes=55))
+        self.client.force_login(self.dueno)
+        response = self.cancelar(r.pk)
+        self.assertRedirects(response, "/mis-reservas/")
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.ACTIVA)
+        self.assertTrue(any("2 horas" in m for m in self.mensajes(response)))
+
+    def test_frontera_exacta_con_ahora_fijo(self):
+        ahora = timezone.now()
+        inicio = ahora + timedelta(hours=2)
+        r = Booking(user=self.dueno, resource=self.pista, start_time=inicio, end_time=inicio + timedelta(hours=1))
+        self.assertTrue(r.puede_cancelar(self.dueno, ahora)[0])  # justo 2 h: permitido
+        self.assertFalse(r.puede_cancelar(self.dueno, ahora + timedelta(seconds=1))[0])  # 1 s menos
+
+    def test_staff_dentro_de_las_2_horas_si_puede(self):
+        r = self.reserva(timedelta(minutes=30))
+        self.client.force_login(self.staff)
+        self.cancelar(r.pk)
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.CANCELADA)
+
+    def test_reserva_empezada_no_se_cancela_ni_por_staff(self):
+        r = self.reserva(timedelta(minutes=-30))
+        for usuario in (self.dueno, self.staff):
+            self.client.force_login(usuario)
+            response = self.cancelar(r.pk)
+            self.assertRedirects(response, "/mis-reservas/")
+            r.refresh_from_db()
+            self.assertEqual(r.estado, Booking.Estado.ACTIVA)
+
+    def test_reserva_pasada_no_se_cancela(self):
+        r = self.reserva(timedelta(days=-2))
+        self.client.force_login(self.dueno)
+        self.cancelar(r.pk)
+        r.refresh_from_db()
+        self.assertEqual(r.estado, Booking.Estado.ACTIVA)
+
+    def test_la_regla_se_comunica_en_la_pagina(self):
+        self.client.force_login(self.dueno)
+        response = self.client.get("/mis-reservas/")
+        self.assertContains(response, "hasta 2 horas antes")
+
+    def test_reserva_dentro_de_limite_no_ofrece_boton(self):
+        r = self.reserva(timedelta(minutes=30))
+        self.client.force_login(self.dueno)
+        response = self.client.get("/mis-reservas/")
+        self.assertNotContains(response, f"/reservas/{r.pk}/cancelar/")
+        self.assertContains(response, "Solo puedes cancelar hasta 2 horas antes")
+
+
+class CancelacionRepetidaTests(CancelacionBase):
+    def test_cancelar_dos_veces_la_segunda_falla_sin_cambiar_datos(self):
+        r = self.reserva(timedelta(days=3))
+        self.client.force_login(self.dueno)
+        self.cancelar(r.pk)
+        r.refresh_from_db()
+        primera = r.cancelada_en
+        response = self.cancelar(r.pk)
+        self.assertRedirects(response, "/mis-reservas/")
+        self.assertTrue(any("ya está cancelada" in m for m in self.mensajes(response)))
+        r.refresh_from_db()
+        self.assertEqual(r.cancelada_en, primera)
+
+    def test_staff_tampoco_puede_cancelar_una_cancelada(self):
+        r = self.reserva(timedelta(days=3))
+        r.cancelar(self.dueno)
+        self.client.force_login(self.staff)
+        response = self.cancelar(r.pk)
+        self.assertTrue(any("ya está cancelada" in m for m in self.mensajes(response)))
+        r.refresh_from_db()
+        self.assertEqual(r.cancelada_por, self.dueno)
+
+
+class CancelacionDisponibilidadTests(CancelacionBase):
+    def crear_via_api(self, inicio, fin, repeat_weeks=0):
+        return self.client.post("/api/reservas/crear/", json.dumps({
+            "resource_id": self.pista.id, "start_time": inicio.isoformat(),
+            "end_time": fin.isoformat(), "repeat_weeks": repeat_weeks,
+        }), content_type="application/json")
+
+    def test_api_reservas_deja_de_devolver_la_cancelada(self):
+        r = self.reserva(timedelta(days=3))
+        otra = self.reserva(timedelta(days=4))
+        self.assertEqual(len(self.client.get(f"/api/reservas/{self.pista.id}/").json()), 2)
+        r.cancelar(self.dueno)
+        eventos = self.client.get(f"/api/reservas/{self.pista.id}/").json()
+        self.assertEqual(len(eventos), 1)
+        self.assertEqual(eventos[0]["start"], otra.start_time.isoformat())
+
+    def test_se_puede_volver_a_reservar_la_franja_cancelada(self):
+        r = self.reserva(timedelta(days=3))
+        inicio, fin = r.start_time, r.end_time
+        self.client.force_login(self.otro)
+        self.assertEqual(self.crear_via_api(inicio, fin).status_code, 409)
+        r.cancelar(self.dueno)
+        response = self.crear_via_api(inicio, fin)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Booking.objects.filter(estado=Booking.Estado.ACTIVA).count(), 1)
+        self.assertEqual(Booking.objects.count(), 2)  # la cancelada se conserva
+
+    def test_la_restriccion_unica_solo_aplica_a_activas(self):
+        r = self.reserva(timedelta(days=3))
+        r.cancelar(self.dueno)
+        Booking.objects.create(user=self.otro, resource=self.pista, start_time=r.start_time, end_time=r.end_time)
+        from django.db import IntegrityError, transaction
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Booking.objects.create(user=self.dueno, resource=self.pista, start_time=r.start_time, end_time=r.end_time)
+
+    def test_booking_clean_ignora_canceladas(self):
+        r = self.reserva(timedelta(days=3))
+        r.cancelar(self.dueno)
+        nueva = Booking(user=self.otro, resource=self.pista, start_time=r.start_time, end_time=r.end_time)
+        nueva.clean()  # no lanza
+
+    def test_bloqueo_no_cuenta_reservas_canceladas_como_solapadas(self):
+        r = self.reserva(timedelta(days=3))
+        r.cancelar(self.dueno)
+        bloque = Availability(resource=self.pista, start_time=r.start_time, end_time=r.end_time)
+        bloque.clean()
+        self.assertEqual(bloque.reservas_solapadas, 0)
+
+    def test_vista_calendario_no_lista_canceladas(self):
+        r = self.reserva(timedelta(hours=1))
+        r.start_time = timezone.now().replace(hour=10, minute=0, second=0, microsecond=0)
+        r.end_time = r.start_time + timedelta(hours=1)
+        r.save()
+        response = self.client.get(f"/calendario/{self.pista.id}/")
+        self.assertEqual(response.status_code, 200)
+        total = sum(len(v) for v in response.context["reservas_por_dia"].values())
+        self.assertEqual(total, 1)
+        r.cancelar(self.dueno)
+        response = self.client.get(f"/calendario/{self.pista.id}/")
+        self.assertEqual(sum(len(v) for v in response.context["reservas_por_dia"].values()), 0)
+
+    def test_prevision_excluye_canceladas(self):
+        inicio = datetime(2026, 9, 9, 10, tzinfo=dt_timezone.utc)
+        activa = Booking.objects.create(user=self.dueno, resource=self.pista,
+                                        start_time=inicio, end_time=inicio + timedelta(hours=1))
+        cancelada = Booking.objects.create(user=self.dueno, resource=self.pista,
+                                           start_time=inicio + timedelta(days=1),
+                                           end_time=inicio + timedelta(days=1, hours=2))
+        desde, hasta = date(2026, 9, 7), date(2026, 9, 14)
+        antes = forecast.agregar_semanas(self.pista, desde, hasta)
+        self.assertEqual((antes[0]["reservas"], antes[0]["horas"]), (2, 3.0))
+        cancelada.cancelar(self.dueno)
+        despues = forecast.agregar_semanas(self.pista, desde, hasta)
+        self.assertEqual((despues[0]["reservas"], despues[0]["horas"]), (1, 1.0))
+        activa.refresh_from_db()
+        self.assertEqual(activa.estado, Booking.Estado.ACTIVA)
+
+
+class SerieTests(CancelacionBase):
+    def crear_serie(self, semanas=3, inicio=None):
+        inicio = inicio or (timezone.now() + timedelta(days=10)).replace(microsecond=0)
+        self.client.force_login(self.dueno)
+        response = self.client.post("/api/reservas/crear/", json.dumps({
+            "resource_id": self.pista.id, "start_time": inicio.isoformat(),
+            "end_time": (inicio + timedelta(hours=1)).isoformat(), "repeat_weeks": semanas,
+        }), content_type="application/json")
+        self.assertEqual(response.status_code, 200)
+        return list(Booking.objects.filter(resource=self.pista).order_by("start_time"))
+
+    def test_las_ocurrencias_comparten_serie(self):
+        reservas = self.crear_serie(3)
+        self.assertEqual(len(reservas), 4)
+        series = {r.serie for r in reservas}
+        self.assertEqual(len(series), 1)
+        self.assertIsNotNone(series.pop())
+
+    def test_reserva_simple_no_tiene_serie(self):
+        reservas = self.crear_serie(0)
+        self.assertEqual(len(reservas), 1)
+        self.assertIsNone(reservas[0].serie)
+
+    def test_dos_series_distintas_no_se_mezclan(self):
+        a = self.crear_serie(1)
+        b = self.crear_serie(1, inicio=timezone.now() + timedelta(days=11, hours=3))
+        self.assertEqual(len({r.serie for r in b} - {r.serie for r in a if r.serie}), 1)
+
+    def test_la_respuesta_de_la_api_conserva_su_contrato(self):
+        self.client.force_login(self.dueno)
+        inicio = timezone.now() + timedelta(days=5)
+        response = self.client.post("/api/reservas/crear/", json.dumps({
+            "resource_id": self.pista.id, "start_time": inicio.isoformat(),
+            "end_time": (inicio + timedelta(hours=1)).isoformat(), "repeat_weeks": 1,
+        }), content_type="application/json")
+        self.assertEqual(set(response.json()), {"success", "reservas"})
+        self.assertEqual(set(response.json()["reservas"][0]), {"start", "end"})
+
+    def test_cancelar_una_de_la_serie_no_toca_las_demas(self):
+        reservas = self.crear_serie(3)
+        self.cancelar(reservas[1].pk, "una")
+        estados = [Booking.objects.get(pk=r.pk).estado for r in reservas]
+        self.assertEqual(estados, ["activa", "cancelada", "activa", "activa"])
+
+    def test_cancelar_esta_y_las_siguientes(self):
+        reservas = self.crear_serie(3)
+        response = self.cancelar(reservas[1].pk, "serie")
+        estados = [Booking.objects.get(pk=r.pk).estado for r in reservas]
+        self.assertEqual(estados, ["activa", "cancelada", "cancelada", "cancelada"])
+        self.assertTrue(any("3 reserva(s)" in m for m in self.mensajes(response)))
+
+    def test_serie_solo_cancela_las_siguientes_activas(self):
+        serie = uuid.uuid4()
+        anterior = self.reserva(timedelta(days=3), serie=serie)
+        elegida = self.reserva(timedelta(days=10), serie=serie)
+        ya_cancelada = self.reserva(timedelta(days=17), serie=serie)
+        ya_cancelada.cancelar(self.otro)
+        siguiente = self.reserva(timedelta(days=24), serie=serie)
+        self.client.force_login(self.dueno)
+        response = self.cancelar(elegida.pk, "serie")
+        estados = [Booking.objects.get(pk=x.pk).estado for x in (anterior, elegida, ya_cancelada, siguiente)]
+        self.assertEqual(estados, ["activa", "cancelada", "cancelada", "cancelada"])
+        self.assertEqual(Booking.objects.get(pk=ya_cancelada.pk).cancelada_por, self.otro)  # no se reescribe
+        self.assertTrue(any("2 reserva(s)" in m for m in self.mensajes(response)))
+
+    def test_serie_con_la_elegida_fuera_del_limite_no_cambia_nada(self):
+        serie = uuid.uuid4()
+        elegida = self.reserva(timedelta(minutes=90), serie=serie)
+        siguiente = self.reserva(timedelta(days=7), serie=serie)
+        self.client.force_login(self.dueno)
+        response = self.cancelar(elegida.pk, "serie")
+        self.assertTrue(any("2 horas" in m for m in self.mensajes(response)))
+        self.assertEqual([Booking.objects.get(pk=x.pk).estado for x in (elegida, siguiente)], ["activa", "activa"])
+
+    def test_staff_cancela_serie_incluso_dentro_de_2_horas(self):
+        serie = uuid.uuid4()
+        a = self.reserva(timedelta(minutes=40), serie=serie)
+        b = self.reserva(timedelta(minutes=100), serie=serie)
+        c = self.reserva(timedelta(days=7), serie=serie)
+        self.client.force_login(self.staff)
+        self.cancelar(a.pk, "serie")
+        self.assertEqual([Booking.objects.get(pk=x.pk).estado for x in (a, b, c)], ["cancelada"] * 3)
+
+    def test_alcance_serie_en_reserva_simple_cancela_solo_esa(self):
+        r = self.reserva(timedelta(days=3))
+        otra = self.reserva(timedelta(days=4))
+        self.client.force_login(self.dueno)
+        self.cancelar(r.pk, "serie")
+        r.refresh_from_db(); otra.refresh_from_db()
+        self.assertEqual((r.estado, otra.estado), ("cancelada", "activa"))
+
+    def test_mis_reservas_muestra_ocurrencia_n_de_m_contando_canceladas(self):
+        reservas = self.crear_serie(3)
+        reservas[0].cancelar(self.dueno)
+        response = self.client.get("/mis-reservas/")
+        self.assertContains(response, "Serie: ocurrencia 2 de 4")
+        self.assertContains(response, "Serie: ocurrencia 4 de 4")
+        self.assertContains(response, "Serie: ocurrencia 1 de 4")  # la cancelada, en el historial
+        self.assertContains(response, "Cancelar esta y las siguientes")
+
+    def test_mis_reservas_separa_proximas_e_historial(self):
+        futura = self.reserva(timedelta(days=3))
+        cancelada = self.reserva(timedelta(days=5))
+        cancelada.cancelar(self.dueno)
+        pasada = self.reserva(timedelta(days=-3))
+        self.client.force_login(self.dueno)
+        response = self.client.get("/mis-reservas/")
+        self.assertEqual([r.pk for r in response.context["proximas"]], [futura.pk])
+        self.assertEqual({r.pk for r in response.context["historial"]}, {cancelada.pk, pasada.pk})
+        self.assertContains(response, "Cancelada")
+        self.assertContains(response, "Pasada")
+
+
+class EnlaceMisReservasTests(CancelacionBase):
+    def test_home_muestra_el_enlace_solo_a_usuarios_autenticados(self):
+        self.assertNotContains(self.client.get("/"), "/mis-reservas/")
+        self.client.force_login(self.dueno)
+        self.assertContains(self.client.get("/"), "/mis-reservas/")
+
+    def test_admin_lista_estado_y_serie(self):
+        self.staff.is_superuser = True
+        self.staff.save()
+        r = self.reserva(timedelta(days=3), serie=uuid.uuid4())
+        self.client.force_login(self.staff)
+        response = self.client.get("/admin/reservas/booking/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Estado")
+        self.assertContains(response, "Serie")
+        self.assertContains(response, str(r.serie)[:8])
