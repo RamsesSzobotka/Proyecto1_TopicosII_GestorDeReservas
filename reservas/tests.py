@@ -1,11 +1,12 @@
 import json
-from datetime import timedelta
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.test import TestCase, Client
 from django.utils import timezone
 
+from . import forecast
 from .models import Availability, Booking, Resource
 
 
@@ -231,3 +232,221 @@ class VistasTests(TestCase):
     def test_calendario_full_carga(self):
         response = self.client.get(f"/calendario_full/{self.resource.id}/")
         self.assertEqual(response.status_code, 200)
+
+
+def utc(y, m, d, h=0, mi=0):
+    return datetime(y, m, d, h, mi, tzinfo=dt_timezone.utc)
+
+
+class PrevisionDemandaTests(TestCase):
+    """Issue #5: previsión de la demanda (solo administradores, solo lectura)."""
+    URL = "/prevision/"
+    DESDE = date(2026, 9, 7)   # lunes
+    HASTA = date(2026, 10, 5)  # lunes (excluido): 4 semanas completas
+
+    def setUp(self):
+        self.staff = User.objects.create_user(username="admin1", password="pass1234", is_staff=True)
+        self.normal = User.objects.create_user(username="normal", password="pass1234")
+        self.pista = Resource.objects.create(name="Pista 1")
+        self.otra = Resource.objects.create(name="Pista 2")
+
+    def reservar(self, recurso, inicio, fin):
+        return Booking.objects.create(user=self.normal, resource=recurso, start_time=inicio, end_time=fin)
+
+    def cargar_fixtures(self):
+        # Semana 07/09: borde lunes 00:00 (1.5 h) + miércoles (2 h) -> 2 reservas, 3.5 h
+        self.reservar(self.pista, utc(2026, 9, 7, 0, 0), utc(2026, 9, 7, 1, 30))
+        self.reservar(self.pista, utc(2026, 9, 9, 10), utc(2026, 9, 9, 12))
+        # Semana 14/09: vacía
+        # Semana 21/09: domingo 23:00 a lunes 01:00 -> cuenta en su semana de inicio, 2 h
+        self.reservar(self.pista, utc(2026, 9, 27, 23), utc(2026, 9, 28, 1))
+        # Semana 28/09: 3 reservas, 2.5 h
+        self.reservar(self.pista, utc(2026, 9, 28, 0), utc(2026, 9, 28, 1))
+        self.reservar(self.pista, utc(2026, 9, 30, 9), utc(2026, 9, 30, 10))
+        self.reservar(self.pista, utc(2026, 9, 30, 11), utc(2026, 9, 30, 11, 30))
+        # Fuera del rango: justo antes de desde y justo en hasta (excluido)
+        self.reservar(self.pista, utc(2026, 9, 6, 23), utc(2026, 9, 7, 0))
+        self.reservar(self.pista, utc(2026, 10, 5, 0), utc(2026, 10, 5, 1))
+        # Otro recurso dentro del rango: no debe contarse
+        self.reservar(self.otra, utc(2026, 9, 8, 10), utc(2026, 9, 8, 12))
+
+    def get(self, **params):
+        base = {"recurso": self.pista.id, "desde": self.DESDE.isoformat(), "hasta": self.HASTA.isoformat()}
+        base.update(params)
+        return self.client.get(self.URL, base)
+
+    # --- permisos ---
+    def test_anonimo_redirige_al_login_de_admin(self):
+        response = self.client.get(self.URL)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/admin/login/"))
+
+    def test_usuario_normal_redirige(self):
+        self.client.force_login(self.normal)
+        response = self.client.get(self.URL)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/admin/login/"))
+
+    def test_staff_inactivo_redirige(self):
+        inactivo = User.objects.create_user(username="inactivo", password="pass1234", is_staff=True, is_active=False)
+        self.client.force_login(inactivo)
+        self.assertEqual(self.client.get(self.URL).status_code, 302)
+
+    def test_staff_accede(self):
+        self.client.force_login(self.staff)
+        self.assertEqual(self.client.get(self.URL).status_code, 200)
+
+    def test_post_devuelve_405(self):
+        self.client.force_login(self.staff)
+        self.assertEqual(self.client.post(self.URL, {"recurso": self.pista.id}).status_code, 405)
+
+    def test_home_muestra_enlace_solo_a_staff(self):
+        self.assertNotContains(self.client.get("/"), "/prevision/")
+        self.client.force_login(self.normal)
+        self.assertNotContains(self.client.get("/"), "/prevision/")
+        self.client.force_login(self.staff)
+        self.assertContains(self.client.get("/"), "/prevision/")
+
+    # --- agregación ---
+    def test_agregacion_exacta_por_semana(self):
+        self.cargar_fixtures()
+        semanas = forecast.agregar_semanas(self.pista, self.DESDE, self.HASTA)
+        resumen = [(s["inicio"], s["reservas"], s["horas"], s["completa"]) for s in semanas]
+        self.assertEqual(resumen, [
+            (date(2026, 9, 7), 2, 3.5, True),
+            (date(2026, 9, 14), 0, 0.0, True),   # semana vacía en medio
+            (date(2026, 9, 21), 1, 2.0, True),
+            (date(2026, 9, 28), 3, 2.5, True),
+        ])
+
+    def test_aislamiento_entre_recursos(self):
+        self.cargar_fixtures()
+        semanas = forecast.agregar_semanas(self.otra, self.DESDE, self.HASTA)
+        self.assertEqual([s["reservas"] for s in semanas], [1, 0, 0, 0])
+        self.assertEqual(semanas[0]["horas"], 2.0)
+
+    def test_semana_parcial_se_marca_y_borde_desde_incluido(self):
+        self.reservar(self.pista, utc(2026, 9, 1, 0), utc(2026, 9, 1, 1))  # martes 00:00 = desde
+        semanas = forecast.agregar_semanas(self.pista, date(2026, 9, 1), self.HASTA)
+        self.assertEqual(semanas[0]["inicio"], date(2026, 8, 31))
+        self.assertFalse(semanas[0]["completa"])
+        self.assertEqual(semanas[0]["reservas"], 1)
+        self.assertTrue(all(s["completa"] for s in semanas[1:]))
+
+    def test_agregar_rechaza_rango_invertido(self):
+        with self.assertRaises(ValueError):
+            forecast.agregar_semanas(self.pista, self.HASTA, self.DESDE)
+
+    # --- previsión ---
+    def test_media_movil_exacta(self):
+        self.cargar_fixtures()
+        semanas = forecast.agregar_semanas(self.pista, self.DESDE, self.HASTA)
+        resultado = forecast.pronosticar(semanas)
+        self.assertTrue(resultado["suficiente"])
+        self.assertEqual(len(resultado["prevision"]), forecast.HORIZONTE_SEMANAS)
+        # reservas: (2+0+1+3)/4 = 1.5 ; horas: (3.5+0+2+2.5)/4 = 2.0
+        self.assertEqual([p["inicio"] for p in resultado["prevision"]],
+                         [date(2026, 10, 5), date(2026, 10, 12), date(2026, 10, 19), date(2026, 10, 26)])
+        for p in resultado["prevision"]:
+            self.assertEqual(p["reservas"], 1.5)
+            self.assertEqual(p["horas"], 2.0)
+
+    def test_media_movil_solo_usa_las_ultimas_semanas_completas(self):
+        semanas = [
+            {"inicio": date(2026, 8, 31) + timedelta(weeks=i), "reservas": r, "horas": float(r), "completa": True}
+            for i, r in enumerate([100, 1, 2, 3, 4])
+        ]
+        resultado = forecast.pronosticar(semanas)
+        self.assertEqual(resultado["prevision"][0]["reservas"], 2.5)  # (1+2+3+4)/4, sin el 100
+
+    def test_determinismo(self):
+        self.cargar_fixtures()
+        a = forecast.pronosticar(forecast.agregar_semanas(self.pista, self.DESDE, self.HASTA))
+        b = forecast.pronosticar(forecast.agregar_semanas(self.pista, self.DESDE, self.HASTA))
+        self.assertEqual(a, b)
+
+    def test_rango_por_defecto(self):
+        desde, hasta = forecast.rango_por_defecto(date(2026, 10, 21))  # miércoles
+        self.assertEqual(hasta, date(2026, 10, 19))
+        self.assertEqual(desde, date(2026, 7, 27))
+
+    # --- sin datos / historial insuficiente ---
+    def test_sin_reservas_estado_comprensible(self):
+        self.client.force_login(self.staff)
+        response = self.get()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context["resultado"]["suficiente"])
+        self.assertEqual(response.context["resultado"]["prevision"], [])
+        self.assertContains(response, "No hay reservas registradas")
+
+    def test_historial_insuficiente_estado_comprensible(self):
+        self.cargar_fixtures()
+        self.client.force_login(self.staff)
+        response = self.get(desde="2026-09-14")  # solo 3 semanas completas
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context["resultado"]["suficiente"])
+        self.assertContains(response, "historial es insuficiente")
+        self.assertContains(response, "No se puede estimar la demanda")
+
+    def test_sin_recurso_muestra_selector_y_estado_vacio(self):
+        self.client.force_login(self.staff)
+        response = self.client.get(self.URL)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pista 1")
+        self.assertContains(response, "Elige un recurso")
+
+    def test_con_datos_muestra_grafico_aviso_y_json(self):
+        self.cargar_fixtures()
+        self.client.force_login(self.staff)
+        response = self.get()
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Esta previsión es una estimación basada en el histórico; no modifica precios ni inventario.")
+        self.assertContains(response, 'id="datos-prevision"')
+        self.assertContains(response, "chart.js@4.4.1")
+        self.assertEqual(response.context["datos"]["recurso"], "Pista 1")
+        self.assertEqual(response.context["datos"]["desde"], "2026-09-07")
+        self.assertEqual(response.context["datos"]["hasta"], "2026-10-05")
+
+    # --- rangos y entradas inválidas (400, nunca 500) ---
+    def assert_400(self, response, texto):
+        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, texto, status_code=400)
+
+    def test_fecha_invalida(self):
+        self.client.force_login(self.staff)
+        self.assert_400(self.get(desde="no-es-fecha"), "formato AAAA-MM-DD")
+        self.assert_400(self.get(hasta="2026-02-30"), "formato AAAA-MM-DD")
+        self.assert_400(self.get(desde="20260907"), "formato AAAA-MM-DD")
+
+    def test_desde_igual_o_posterior_a_hasta(self):
+        self.client.force_login(self.staff)
+        self.assert_400(self.get(desde="2026-10-05", hasta="2026-10-05"), "anterior")
+        self.assert_400(self.get(desde="2026-10-12", hasta="2026-10-05"), "anterior")
+
+    def test_rango_mayor_a_52_semanas(self):
+        self.client.force_login(self.staff)
+        self.assert_400(self.get(desde="2025-01-01", hasta="2026-10-05"), "52 semanas")
+
+    def test_rango_de_exactamente_52_semanas_es_valido(self):
+        self.client.force_login(self.staff)
+        response = self.get(desde="2025-10-06", hasta="2026-10-05")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context["semanas"]), 52)
+
+    def test_recurso_inexistente_o_invalido(self):
+        self.client.force_login(self.staff)
+        self.assert_400(self.get(recurso=99999), "no existe")
+        self.assert_400(self.get(recurso="abc"), "no existe")
+        self.assert_400(self.get(recurso="-1"), "no existe")
+        self.assert_400(self.get(recurso="²"), "no existe")
+
+    # --- solo lectura ---
+    def test_la_vista_no_modifica_la_base_de_datos(self):
+        self.cargar_fixtures()
+        self.client.force_login(self.staff)
+        antes = (Booking.objects.count(), Resource.objects.count(), Availability.objects.count())
+        self.get()
+        self.get(desde="x")
+        self.client.get(self.URL)
+        despues = (Booking.objects.count(), Resource.objects.count(), Availability.objects.count())
+        self.assertEqual(antes, despues)
