@@ -90,33 +90,8 @@ def calendario_full(request, resource_id):
     """
     resource = get_object_or_404(Resource, id=resource_id)
 
-    reservas = Booking.objects.filter(resource=resource).order_by('start_time')
-    bloqueos = Availability.objects.filter(resource=resource)
-
-    # Lista de reservas
-    reservas_json = [
-        {
-            "start": reserva.start_time.isoformat(),
-            "end": reserva.end_time.isoformat(),
-            "title": f"Reservado por {reserva.user.username}",
-            "color": "#10b981",  # Verde reservas
-        }
-        for reserva in reservas
-    ]
-
-    # Lista de bloqueos (rojo)
-    bloqueos_json = [
-        {
-            "start": bloqueo.start_time.isoformat(),
-            "end": bloqueo.end_time.isoformat(),
-        }
-        for bloqueo in bloqueos
-    ]
-
     return render(request, 'reservas/calendario_full.html', {
         'resource': resource,
-        'reservas_json': json.dumps(reservas_json),
-        'bloqueos_json': json.dumps(bloqueos_json),
         'is_authenticated': request.user.is_authenticated,
     })
 
@@ -258,10 +233,33 @@ def api_reservas(request, resource_id):
             "start": reserva.start_time.isoformat(),
             "end": reserva.end_time.isoformat(),
             "color": "#10b981",  # Verde
+            "kind": "reserva",
         }
         for reserva in reservas
     ]
     return JsonResponse(eventos, safe=False)
+
+
+def api_bloqueos(request, resource_id):
+    """
+    API que devuelve los bloqueos administrativos de un recurso en formato JSON
+    para el calendario del cliente. Al servirse por URL (y no embebido en el
+    HTML), el calendario refleja los cambios de bloqueos al refrescar.
+    """
+    bloqueos = Availability.objects.filter(resource_id=resource_id).order_by('start_time')
+    eventos = [
+        {
+            "title": "Bloqueado",
+            "start": bloqueo.start_time.isoformat(),
+            "end": bloqueo.end_time.isoformat(),
+            "color": "#ef4444",  # Rojo: bloqueos
+            "textColor": "#fff",
+            "kind": "bloqueo",
+        }
+        for bloqueo in bloqueos
+    ]
+    return JsonResponse(eventos, safe=False)
+
 
 def home(request):
     """

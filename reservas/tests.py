@@ -1,7 +1,8 @@
 import json
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Permission, User
+from django.contrib.messages import get_messages
 from django.core.exceptions import ValidationError
 from django.test import TestCase, Client
 from django.utils import timezone
@@ -48,6 +49,65 @@ class BookingCleanTests(TestCase):
             end_time=self.end + timedelta(hours=2)
         )
         libre.clean()  # no debe lanzar ValidationError
+
+    def test_clean_rechaza_solape_con_bloqueo(self):
+        Availability.objects.create(
+            resource=self.resource, start_time=self.start, end_time=self.end
+        )
+        solapada = Booking(
+            user=self.user, resource=self.resource,
+            start_time=self.start, end_time=self.end
+        )
+        with self.assertRaises(ValidationError):
+            solapada.clean()
+
+
+class AvailabilityCleanTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="tester", password="pass1234")
+        self.resource = Resource.objects.create(name="Pista 1")
+        self.start = base_futura()
+        self.end = self.start + timedelta(hours=1)
+
+    def test_clean_rechaza_intervalo_invertido(self):
+        bloque = Availability(
+            resource=self.resource,
+            start_time=self.end,
+            end_time=self.start
+        )
+        with self.assertRaises(ValidationError):
+            bloque.clean()
+
+    def test_clean_rechaza_intervalo_de_duracion_cero(self):
+        bloque = Availability(
+            resource=self.resource,
+            start_time=self.start,
+            end_time=self.start
+        )
+        with self.assertRaises(ValidationError):
+            bloque.clean()
+
+    def test_clean_permite_intervalo_valido(self):
+        bloque = Availability(
+            resource=self.resource,
+            start_time=self.start,
+            end_time=self.end
+        )
+        bloque.clean()  # no debe lanzar ValidationError
+        self.assertEqual(bloque.reservas_solapadas, 0)
+
+    def test_clean_permite_bloqueo_que_solapa_reserva_existente(self):
+        Booking.objects.create(
+            user=self.user, resource=self.resource,
+            start_time=self.start, end_time=self.end
+        )
+        bloque = Availability(
+            resource=self.resource,
+            start_time=self.start,
+            end_time=self.end
+        )
+        bloque.clean()  # la reserva existente gana: no debe lanzar
+        self.assertEqual(bloque.reservas_solapadas, 1)
 
 
 class ApiCrearReservaTests(TestCase):
@@ -234,6 +294,135 @@ class VistasTests(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class AdminBloqueosTests(TestCase):
+    def setUp(self):
+        self.resource = Resource.objects.create(name="Pista 1")
+        self.start = base_futura()
+        self.end = self.start + timedelta(hours=1)
+        self.url_add = "/admin/reservas/availability/add/"
+
+    def staff_con_permiso(self, username="staff", codename="add_availability"):
+        staff = User.objects.create_user(
+            username=username, password="pass1234", is_staff=True
+        )
+        staff.user_permissions.add(Permission.objects.get(codename=codename))
+        return staff
+
+    def payload_bloqueo(self, inicio, fin):
+        """
+        El admin usa el widget SplitDateTime: la fecha y la hora van en campos
+        separados (start_time_0 / start_time_1).
+        """
+        return {
+            "resource": self.resource.id,
+            "start_time_0": inicio.strftime("%Y-%m-%d"),
+            "start_time_1": inicio.strftime("%H:%M:%S"),
+            "end_time_0": fin.strftime("%Y-%m-%d"),
+            "end_time_1": fin.strftime("%H:%M:%S"),
+            "_save": "Guardar",
+        }
+
+    def test_usuario_no_staff_no_entra_al_admin(self):
+        user = User.objects.create_user(username="normal", password="pass1234")
+        self.client.force_login(user)
+        response = self.client.get(self.url_add)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/admin/login/", response["Location"])
+
+    def test_staff_sin_permiso_no_puede_crear_bloqueo(self):
+        staff = User.objects.create_user(
+            username="staff", password="pass1234", is_staff=True
+        )
+        self.client.force_login(staff)
+        response = self.client.get(self.url_add)
+        self.assertEqual(response.status_code, 403)
+
+    def test_staff_con_permiso_puede_crear_bloqueo(self):
+        staff = self.staff_con_permiso()
+        self.client.force_login(staff)
+        response = self.client.get(self.url_add)
+        self.assertEqual(response.status_code, 200)
+
+    def test_staff_sin_permiso_no_puede_crear_reserva(self):
+        staff = User.objects.create_user(
+            username="staff", password="pass1234", is_staff=True
+        )
+        staff.user_permissions.add(Permission.objects.get(codename="add_availability"))
+        self.client.force_login(staff)
+        response = self.client.get("/admin/reservas/booking/add/")
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_rechaza_intervalo_invertido(self):
+        staff = self.staff_con_permiso()
+        self.client.force_login(staff)
+        response = self.client.post(
+            self.url_add, self.payload_bloqueo(self.end, self.start)
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Availability.objects.count(), 0)
+        self.assertContains(response, "El fin del bloqueo debe ser posterior al inicio.")
+
+    def test_admin_avisa_reservas_solapadas(self):
+        user = User.objects.create_user(username="cliente", password="pass1234")
+        Booking.objects.create(
+            user=user, resource=self.resource,
+            start_time=self.start, end_time=self.end
+        )
+        staff = self.staff_con_permiso()
+        self.client.force_login(staff)
+        response = self.client.post(
+            self.url_add, self.payload_bloqueo(self.start, self.end)
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(Availability.objects.count(), 1)
+        self.assertEqual(Booking.objects.count(), 1)  # la reserva existente se conserva
+        avisos = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any("1 reserva(s)" in a for a in avisos), avisos)
+
+
+class ApiBloqueosTests(TestCase):
+    def setUp(self):
+        self.resource = Resource.objects.create(name="Pista 1")
+        self.otro = Resource.objects.create(name="Pista 2")
+        self.user = User.objects.create_user(username="tester", password="pass1234")
+        self.start = base_futura()
+        self.end = self.start + timedelta(hours=1)
+
+    def test_devuelve_solo_los_bloqueos_del_recurso(self):
+        Availability.objects.create(
+            resource=self.resource, start_time=self.start, end_time=self.end
+        )
+        Availability.objects.create(
+            resource=self.otro, start_time=self.start, end_time=self.end
+        )
+        response = self.client.get(f"/api/bloqueos/{self.resource.id}/")
+        self.assertEqual(response.status_code, 200)
+        eventos = response.json()
+        self.assertEqual(len(eventos), 1)
+        self.assertEqual(eventos[0]["kind"], "bloqueo")
+        self.assertEqual(eventos[0]["title"], "Bloqueado")
+
+    def test_recurso_sin_bloqueos_devuelve_lista_vacia(self):
+        response = self.client.get(f"/api/bloqueos/{self.resource.id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_api_reservas_incluye_el_tipo_reserva(self):
+        Booking.objects.create(
+            user=self.user, resource=self.resource,
+            start_time=self.start, end_time=self.end
+        )
+        response = self.client.get(f"/api/reservas/{self.resource.id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()[0]["kind"], "reserva")
+
+    def test_calendario_full_carga_bloqueos_desde_la_api(self):
+        Availability.objects.create(
+            resource=self.resource, start_time=self.start, end_time=self.end
+        )
+        response = self.client.get(f"/calendario_full/{self.resource.id}/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f"/api/bloqueos/{self.resource.id}/")
 def utc(y, m, d, h=0, mi=0):
     return datetime(y, m, d, h, mi, tzinfo=dt_timezone.utc)
 

@@ -118,7 +118,7 @@
     {% endif %}
 
     <!-- Botón para actualizar eventos -->
-    <button id="btn-refresh">🔄 Actualizar Reservas</button>
+    <button id="btn-refresh">🔄 Actualizar Reservas y Bloqueos</button>
     
     <!-- Contenedor del calendario con data-resource-id y user-logged -->
     <div id='calendar' 
@@ -134,32 +134,26 @@
             const resourceId = calendarElement.dataset.resourceId;
             const userLogged = calendarElement.dataset.userLogged === "True";
 
-            // Datos de reservas y bloqueos enviados desde Django
-            const reservas = JSON.parse('{{ reservas_json|escapejs }}');
-            const bloqueos = JSON.parse('{{ bloqueos_json|escapejs }}');
+            // Los eventos se leen del calendario ya cargado, para que el refresco
+            // traiga los bloqueos y reservas mas recientes (ISSUE-07).
+            function eventosDe(tipo) {
+                return calendar.getEvents().filter(function(e) {
+                    return e.extendedProps.kind === tipo;
+                });
+            }
 
             // Verifica si hay bloqueo del admin
             function isBlocked(start, end) {
-                for (const b of bloqueos) {
-                    const bloqueadoStart = new Date(b.start);
-                    const bloqueadoEnd = new Date(b.end);
-                    if (start < bloqueadoEnd && end > bloqueadoStart) {
-                        return true;
-                    }
-                }
-                return false;
+                return eventosDe('bloqueo').some(function(e) {
+                    return start < e.end && end > e.start;
+                });
             }
 
             // Verifica si ya existe una reserva
             function isReserved(start, end) {
-                for (const r of reservas) {
-                    const reservaStart = new Date(r.start);
-                    const reservaEnd = new Date(r.end);
-                    if (start < reservaEnd && end > reservaStart) {
-                        return true;
-                    }
-                }
-                return false;
+                return eventosDe('reserva').some(function(e) {
+                    return start < e.end && end > e.start;
+                });
             }
 
             var calendar = new FullCalendar.Calendar(calendarElement, {
@@ -201,9 +195,11 @@
         }
     },
     {
-        events: JSON.parse('{{ bloqueos_json|escapejs }}'),
-        color: '#ef4444',  // Bloqueos en rojo
-        textColor: '#fff'  // Texto en blanco
+        url: '{% url 'api_bloqueos' resource.id %}',
+        method: 'GET',
+        failure: function() {
+            alert('Error cargando bloqueos!');
+        }
     }
 ]
 
