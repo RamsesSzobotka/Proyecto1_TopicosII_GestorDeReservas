@@ -9,9 +9,8 @@ datos ni toca precios o inventario.
 La previsión es una ESTIMACIÓN basada en el histórico, no una decisión
 automática.
 
-Nota sobre cancelaciones: el modelo ``Booking`` todavía no tiene estado de
-cancelación (issue #6). Cuando exista, ``agregar_semanas`` deberá excluir las
-reservas canceladas.
+Cancelaciones (issue #6): ``agregar_semanas`` solo cuenta las reservas con
+estado ``activa``; las canceladas no entran en el histórico ni en la previsión.
 """
 from datetime import datetime, time, timedelta, timezone as dt_timezone
 
@@ -70,7 +69,8 @@ def agregar_semanas(recurso, desde, hasta):
     ini = _a_datetime_utc(desde)
     fin = _a_datetime_utc(hasta)
     filas = Booking.objects.filter(
-        resource=recurso, start_time__gte=ini, start_time__lt=fin
+        resource=recurso, estado=Booking.Estado.ACTIVA,
+        start_time__gte=ini, start_time__lt=fin
     ).values_list('start_time', 'end_time')
 
     primera = inicio_de_semana(desde)
