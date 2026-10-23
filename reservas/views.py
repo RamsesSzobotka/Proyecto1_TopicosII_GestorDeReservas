@@ -1,5 +1,5 @@
 import json
-from datetime import timedelta, time
+from datetime import datetime, timedelta, time
 from django.db import IntegrityError, transaction
 from django.core.exceptions import ValidationError
 from django.shortcuts import render, get_object_or_404, redirect
@@ -10,6 +10,9 @@ from django.utils.dateformat import format as date_format
 from django.utils.dateparse import parse_datetime
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
+from django.contrib.admin.views.decorators import staff_member_required
+from django.views.decorators.http import require_GET
+from . import forecast
 from .models import Resource, Booking, Availability
 
 
@@ -266,3 +269,82 @@ def home(request):
     return render(request, 'reservas/home.html', {'resources': resources})
 
 
+def _parsear_fecha(texto):
+    """Convierte 'YYYY-MM-DD' en date; devuelve None si el formato no es válido."""
+    try:
+        return datetime.strptime(texto, '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
+@staff_member_required
+@require_GET
+def prevision_demanda(request):
+    """
+    Previsión de la demanda de un recurso (solo administradores, solo lectura).
+
+    Parámetros GET: recurso (id), desde y hasta (YYYY-MM-DD, rango [desde, hasta)).
+    Muestra el histórico de reservas por semana y una estimación (media móvil)
+    de las semanas siguientes. No escribe en la base de datos ni modifica
+    precios o inventario. Errores de entrada: página con mensaje y status 400.
+    """
+    recursos = Resource.objects.order_by('name')
+    contexto = {
+        'recursos': recursos,
+        'recurso': None,
+        'error': None,
+        'datos': None,
+        'resultado': None,
+        'ventana': forecast.VENTANA_SEMANAS,
+        'horizonte': forecast.HORIZONTE_SEMANAS,
+    }
+    por_defecto_desde, por_defecto_hasta = forecast.rango_por_defecto(timezone.now().date())
+    desde_txt = request.GET.get('desde', '').strip()
+    hasta_txt = request.GET.get('hasta', '').strip()
+    contexto['desde'] = desde_txt or por_defecto_desde.isoformat()
+    contexto['hasta'] = hasta_txt or por_defecto_hasta.isoformat()
+    recurso_txt = request.GET.get('recurso', '').strip()
+    contexto['recurso_id'] = recurso_txt
+
+    def con_error(mensaje):
+        contexto['error'] = mensaje
+        return render(request, 'reservas/prevision.html', contexto, status=400)
+
+    if not recurso_txt:
+        return render(request, 'reservas/prevision.html', contexto)
+
+    # isdecimal y no isdigit: isdigit acepta '²', que int() no puede convertir.
+    if not recurso_txt.isdecimal() or not Resource.objects.filter(pk=int(recurso_txt)).exists():
+        return con_error('El recurso indicado no existe.')
+    recurso = Resource.objects.get(pk=int(recurso_txt))
+    contexto['recurso'] = recurso
+
+    desde = _parsear_fecha(contexto['desde'])
+    hasta = _parsear_fecha(contexto['hasta'])
+    if desde is None or hasta is None:
+        return con_error('Las fechas deben tener el formato AAAA-MM-DD y ser válidas.')
+    if desde >= hasta:
+        return con_error('La fecha "desde" debe ser anterior a la fecha "hasta".')
+    if (hasta - desde) > timedelta(weeks=forecast.MAXIMO_SEMANAS_RANGO):
+        return con_error(f'El rango no puede superar {forecast.MAXIMO_SEMANAS_RANGO} semanas.')
+
+    semanas = forecast.agregar_semanas(recurso, desde, hasta)
+    resultado = forecast.pronosticar(semanas)
+    contexto['resultado'] = resultado
+    contexto['semanas'] = semanas
+    contexto['datos'] = {
+        'recurso': recurso.name,
+        'desde': desde.isoformat(),
+        'hasta': hasta.isoformat(),
+        'suficiente': resultado['suficiente'],
+        'historico': [
+            {'inicio': s['inicio'].isoformat(), 'reservas': s['reservas'],
+             'horas': s['horas'], 'completa': s['completa']}
+            for s in semanas
+        ],
+        'prevision': [
+            {'inicio': p['inicio'].isoformat(), 'reservas': p['reservas'], 'horas': p['horas']}
+            for p in resultado['prevision']
+        ],
+    }
+    return render(request, 'reservas/prevision.html', contexto)

@@ -10,6 +10,7 @@ urlpatterns = [
     path('api/bloqueos/<int:resource_id>/', views.api_bloqueos, name='api_bloqueos'),  # Bloqueos del admin para el calendario
     path('login/', views.login_view, name='login'),
     path('logout/', views.logout_view, name='logout'),
+    path('prevision/', views.prevision_demanda, name='prevision_demanda'),
 
 
 
