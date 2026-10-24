@@ -101,3 +101,14 @@ Los **bloqueos** son intervalos que el administrador crea desde el panel de admi
 - **Crear una reserva sobre un bloqueo:** el panel de administración rechaza la reserva y la
   API responde `409 Conflict` con el detalle del conflicto. El servidor es la autoridad: la
   comprobación del calendario en el navegador es solo una ayuda visual.
+
+
+## Mis reservas y cancelación
+
+Los usuarios autenticados tienen la página **Mis reservas** (`/mis-reservas/`, enlace en la página de inicio). Lista solo sus propias reservas: primero las próximas y luego el historial (pasadas y canceladas), con recurso, fecha, hora, estado y, si pertenece a una reserva recurrente, "Serie: ocurrencia N de M". Las horas se muestran en UTC.
+
+- **Cancelación lógica:** cancelar no borra la reserva; queda con estado `cancelada` (con quién y cuándo) y deja de ocupar la franja. Desaparece del calendario, de la validación de solapamientos y de la previsión de demanda, y ese horario se puede volver a reservar.
+- **Regla de límite:** el cliente puede cancelar hasta **2 horas antes** del inicio (constante `LIMITE_CANCELACION` en `reservas/models.py`). Una reserva que ya empezó, ya pasó o ya está cancelada no se puede cancelar de nuevo. La regla se muestra en la página y en el mensaje de error.
+- **Administradores:** un usuario `is_staff` puede cancelar cualquier reserva (también ajena) mientras no haya empezado, sin el margen de 2 horas, con `POST /reservas/<id>/cancelar/`.
+- **Series:** las reservas creadas con repetición semanal comparten un identificador de serie. Se puede cancelar **solo una ocurrencia** (`alcance=una`) o **esa y las siguientes** de la serie (`alcance=serie`); en ese caso solo se cancelan las futuras que sigan activas y cumplan el límite.
+- **Seguridad:** la cancelación es solo `POST` con token CSRF y exige sesión. Una reserva inexistente o ajena (para un usuario que no es administrador) responde el mismo `404`, sin revelar si existe.
