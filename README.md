@@ -83,6 +83,13 @@ El sistema valida solapamientos y bloqueos.
 
 Se pueden crear reservas recurrentes (pregunta cuántas semanas repetir).
 
+#### Calendario de disponibilidad
+
+- **Leyenda:** blanco = disponible (horario 09:00-21:00), verde = ocupado (reserva), azul = tu reserva, rojo = bloqueado por el administrador.
+- **Vistas:** mes, semana y día. En la vista de mes, un clic en un día abre su detalle por horas; solo se reservan franjas horarias.
+- **Zona horaria:** los horarios se muestran en la zona horaria local de tu navegador (indicada bajo la leyenda). El servidor sigue validando cada reserva; si hay conflicto se muestra el mensaje y el calendario se recarga.
+- **Privacidad:** quien no es el titular ni staff ve las reservas ajenas solo como "Ocupado".
+
 ## Política de bloques administrativos
 
 Los **bloqueos** son intervalos que el administrador crea desde el panel de administración
