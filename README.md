@@ -101,3 +101,12 @@ Los **bloqueos** son intervalos que el administrador crea desde el panel de admi
 - **Crear una reserva sobre un bloqueo:** el panel de administración rechaza la reserva y la
   API responde `409 Conflict` con el detalle del conflicto. El servidor es la autoridad: la
   comprobación del calendario en el navegador es solo una ayuda visual.
+
+## Datos de reserva guardados
+
+Cada usuario autenticado puede guardar en `/perfil/` sus datos de reserva para no rellenarlos en cada compra:
+
+- **Se guarda:** nombre completo, teléfono, correo de contacto, método de pago (pago en la pista o tarjeta simulada) y, solo si elige tarjeta, los **4 últimos dígitos** como referencia.
+- **NUNCA se guarda:** número completo de tarjeta, CVV ni fecha de caducidad. El pago es simulado.
+- El calendario muestra qué datos se reutilizan y pide confirmación antes de reservar. Si faltan datos, redirige a `/perfil/`.
+- Cada usuario solo puede ver y modificar sus propios datos (no hay URLs con id). Los datos no se exponen en el panel de administración.

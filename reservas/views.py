@@ -10,10 +10,14 @@ from django.utils.dateformat import format as date_format
 from django.utils.dateparse import parse_datetime
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme, urlencode
 from django.contrib.admin.views.decorators import staff_member_required
 from django.views.decorators.http import require_GET
 from . import forecast
-from .models import Resource, Booking, Availability
+from .forms import PerfilReservaForm
+from .models import Resource, Booking, Availability, PerfilReserva
 
 
 # Horario por defecto (si no hay Availability definida)
@@ -90,9 +94,62 @@ def calendario_full(request, resource_id):
     """
     resource = get_object_or_404(Resource, id=resource_id)
 
+    # Datos de reserva guardados: solo los del propio usuario (ISSUE-03).
+    perfil = _perfil_de(request.user)
+    perfil_completo = bool(perfil and perfil.esta_completo())
+    reserva_config = {
+        'perfilCompleto': perfil_completo,
+        'resumen': perfil.resumen() if perfil_completo else '',
+        'perfilUrl': f"{reverse('perfil')}?{urlencode({'next': request.path})}",
+    }
+
     return render(request, 'reservas/calendario_full.html', {
         'resource': resource,
         'is_authenticated': request.user.is_authenticated,
+        'perfil': perfil,
+        'perfil_completo': perfil_completo,
+        'reserva_config': reserva_config,
+    })
+
+
+def _perfil_de(user):
+    """Perfil de reserva del usuario o None (nunca se busca por id externo)."""
+    if not user.is_authenticated:
+        return None
+    return PerfilReserva.objects.filter(user=user).first()
+
+
+@login_required(login_url='/login/')
+def perfil(request):
+    """
+    Ver y actualizar los datos de reserva del usuario autenticado (ISSUE-03).
+
+    Solo opera sobre el perfil del propio usuario. Acepta ?next= (o campo
+    oculto next) para volver al calendario, validado contra open redirect.
+    """
+    next_url = request.POST.get('next') or request.GET.get('next') or ''
+    if not url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()},
+                                           require_https=request.is_secure()):
+        next_url = ''
+
+    if request.method == 'POST':
+        form = PerfilReservaForm(request.POST, instance=_perfil_de(request.user))
+        if form.is_valid():
+            nuevo = form.save(commit=False)
+            nuevo.user = request.user
+            nuevo.save()
+            if next_url:
+                return redirect(next_url)
+            messages.success(request, 'Tus datos de reserva se guardaron correctamente.')
+            return redirect('perfil')
+    else:
+        form = PerfilReservaForm(instance=_perfil_de(request.user))
+
+    guardado = _perfil_de(request.user)  # Lectura fresca: refleja lo realmente guardado
+    return render(request, 'reservas/perfil.html', {
+        'form': form,
+        'next_url': next_url,
+        'resumen': guardado.resumen() if guardado and guardado.esta_completo() else '',
     })
 
 
@@ -105,7 +162,8 @@ def api_crear_reserva(request):
     de la cookie csrftoken (la emite la vista calendario_full vía ensure_csrf_cookie).
 
     Respuesta exitosa (200): {"success": True, "reservas": [{"start": ISO8601, "end": ISO8601}, ...]}
-    con una entrada por ocurrencia creada (repeat_weeks + 1 en total).
+    con una entrada por ocurrencia creada (repeat_weeks + 1 en total). Con el campo
+    opcional usar_datos_guardados=true añade "datos_usados" (resumen del perfil).
 
     Errores: 400 (JSON/datetime/intervalo/petición inválidos), 403 (sin sesión o CSRF),
     404 (recurso inexistente), 405 (método), 409 (solape con reserva o bloqueo).
@@ -121,6 +179,20 @@ def api_crear_reserva(request):
         return JsonResponse({'success': False, 'error': 'El cuerpo de la petición no es JSON válido.'}, status=400)
     if not isinstance(data, dict):
         return JsonResponse({'success': False, 'error': 'El cuerpo JSON debe ser un objeto.'}, status=400)
+
+    # Datos guardados (ISSUE-03): flag opcional; los datos de pago nunca viajan en el cuerpo.
+    usar_datos_guardados = data.get('usar_datos_guardados', False)
+    if not isinstance(usar_datos_guardados, bool):
+        return JsonResponse({'success': False, 'error': 'usar_datos_guardados debe ser booleano (true o false).'}, status=400)
+    perfil_usado = None
+    if usar_datos_guardados:
+        perfil_usado = _perfil_de(request.user)
+        if perfil_usado is None or not perfil_usado.esta_completo():
+            return JsonResponse({
+                'success': False,
+                'error': 'Completa tus datos de reserva antes de reservar con datos guardados.',
+                'perfil_url': reverse('perfil'),
+            }, status=400)
 
     resource_id = data.get('resource_id')
     if not resource_id:
@@ -196,7 +268,10 @@ def api_crear_reserva(request):
     except (ValueError, ValidationError) as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=400)
 
-    return JsonResponse({'success': True, 'reservas': reservas_creadas})
+    respuesta = {'success': True, 'reservas': reservas_creadas}
+    if perfil_usado is not None:
+        respuesta['datos_usados'] = perfil_usado.resumen()
+    return JsonResponse(respuesta)
 
 
 def login_view(request):

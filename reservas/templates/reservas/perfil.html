@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Mis datos de reserva</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; }
+        .perfil-container {
+            max-width: 520px; margin: 40px auto; padding: 20px;
+            background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h2 { text-align: center; color: #333; }
+        label { display: block; margin-top: 12px; font-weight: bold; }
+        input, select { width: 100%; padding: 10px; margin: 6px 0; box-sizing: border-box; }
+        button { width: 100%; padding: 10px; margin-top: 14px; background: #2563eb; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background: #1e40af; }
+        .ayuda { color: #6b7280; font-size: 0.85rem; }
+        .errorlist { color: #b91c1c; margin: 4px 0; padding-left: 18px; font-size: 0.9rem; }
+        .exito { color: #047857; text-align: center; }
+        .aviso { background: #fef3c7; border: 1px solid #f59e0b; padding: 10px; border-radius: 6px; font-size: 0.9rem; }
+        .reutiliza { background: #eff6ff; border: 1px solid #93c5fd; padding: 10px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 14px; }
+        .volver { display: block; text-align: center; margin-top: 16px; color: #2563eb; }
+    </style>
+</head>
+<body>
+    <div class="perfil-container">
+        <h2>Mis datos de reserva</h2>
+
+        {% if messages %}
+            <div class="exito">
+                {% for message in messages %}
+                    <p>{{ message }}</p>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        <div class="reutiliza">
+            {% if resumen %}
+                <strong>Datos que se reutilizarán en tus reservas:</strong><br>
+                {{ resumen }}
+            {% else %}
+                <strong>Aún no tienes datos guardados.</strong> Complétalos una vez y se reutilizarán en tus próximas reservas.
+            {% endif %}
+        </div>
+
+        <div class="aviso">
+            Pago simulado: aquí nunca se guarda el número completo de la tarjeta, el CVV ni la fecha de caducidad.
+            Si eliges tarjeta, solo se guarda una referencia con los 4 últimos dígitos.
+        </div>
+
+        <form method="post" novalidate>
+            {% csrf_token %}
+            {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+            {{ form.non_field_errors }}
+            {% for campo in form %}
+                <label for="{{ campo.id_for_label }}">{{ campo.label }}</label>
+                {{ campo }}
+                {% if campo.help_text %}<div class="ayuda">{{ campo.help_text }}</div>{% endif %}
+                {{ campo.errors }}
+            {% endfor %}
+            <button type="submit">Guardar datos</button>
+        </form>
+
+        <a class="volver" href="{% if next_url %}{{ next_url }}{% else %}{% url 'home' %}{% endif %}">Volver</a>
+    </div>
+</body>
+</html>
