@@ -1,15 +1,22 @@
 from datetime import timedelta
+import re
 
 from django.db import models
 from django.db.models import Q
 from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.utils import timezone
 
 # Antelación mínima para que un cliente cancele su propia reserva (ISSUE-06).
 # Un administrador (is_staff) no está sujeto a este margen, pero tampoco puede
 # cancelar una reserva que ya empezó.
 LIMITE_CANCELACION = timedelta(hours=2)
+
+# Teléfono: + inicial opcional, dígitos, espacios o guiones; 7 a 20 caracteres en total.
+# [0-9] y \Z en vez de \d y $: \d acepta dígitos Unicode ('１２３４') y $ un '\n' final.
+TELEFONO_REGEX = r'^(?=.{7,20}\Z)\+?[0-9][0-9 \-]*[0-9]\Z'
+ULTIMOS4_REGEX = r'^[0-9]{4}\Z'
 
 
 class Resource(models.Model):
@@ -144,3 +151,71 @@ class Booking(models.Model):
                 name='unique_reserva_activa_por_franja',
             ),
         ]
+
+
+class PerfilReserva(models.Model):
+    """
+    Datos de contacto y referencia de pago SIMULADA de un usuario (ISSUE-03).
+
+    Seguridad: nunca se guarda el número completo de tarjeta, el CVV ni la
+    fecha de caducidad. Solo los 4 últimos dígitos, a modo de referencia.
+    """
+
+    class MetodoPago(models.TextChoices):
+        EN_PISTA = 'en_pista', 'Pago en la pista'
+        TARJETA = 'tarjeta', 'Tarjeta (simulada)'
+
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='perfil_reserva')
+    nombre_completo = models.CharField('nombre completo', max_length=100)
+    telefono = models.CharField(
+        'teléfono', max_length=20,
+        validators=[RegexValidator(
+            regex=TELEFONO_REGEX,
+            message='Introduce un teléfono válido: entre 7 y 20 caracteres con dígitos, espacios, guiones o + inicial.',
+        )],
+    )
+    email_contacto = models.EmailField('correo de contacto')
+    metodo_pago = models.CharField('método de pago', max_length=10, choices=MetodoPago.choices)
+    tarjeta_ultimos4 = models.CharField(
+        'últimos 4 dígitos de la tarjeta', max_length=4, blank=True,
+        validators=[RegexValidator(
+            regex=ULTIMOS4_REGEX,
+            message='Escribe exactamente 4 dígitos (solo los 4 últimos de la tarjeta).',
+        )],
+    )
+    actualizado = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Datos de reserva'
+        verbose_name_plural = 'Datos de reserva'
+
+    def __str__(self):
+        return f"Datos de reserva de {self.user.username}"
+
+    def clean(self):
+        """Coherencia entre método de pago y referencia de tarjeta."""
+        if self.metodo_pago == self.MetodoPago.TARJETA and not self.tarjeta_ultimos4:
+            raise ValidationError({
+                'tarjeta_ultimos4': 'Indica los 4 últimos dígitos de la tarjeta o elige "Pago en la pista".'
+            })
+        if self.metodo_pago == self.MetodoPago.EN_PISTA:
+            self.tarjeta_ultimos4 = ''
+
+    def esta_completo(self):
+        """True si todos los datos necesarios para reservar están presentes y son válidos."""
+        if not (self.nombre_completo and self.telefono and self.email_contacto):
+            return False
+        if not re.match(TELEFONO_REGEX, self.telefono):
+            return False
+        if self.metodo_pago == self.MetodoPago.EN_PISTA:
+            return True
+        if self.metodo_pago == self.MetodoPago.TARJETA:
+            return bool(re.match(ULTIMOS4_REGEX, self.tarjeta_ultimos4 or ''))
+        return False
+
+    def resumen(self):
+        """Texto con los datos que se reutilizan al reservar (sin datos sensibles)."""
+        pago = self.get_metodo_pago_display() or 'Sin método de pago'
+        if self.metodo_pago == self.MetodoPago.TARJETA and self.tarjeta_ultimos4:
+            pago = f"{pago} •••• {self.tarjeta_ultimos4}"
+        return f"{self.nombre_completo} · {self.email_contacto} · {self.telefono} · {pago}"

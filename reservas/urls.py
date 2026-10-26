@@ -13,6 +13,7 @@ urlpatterns = [
     path('prevision/', views.prevision_demanda, name='prevision_demanda'),
     path('mis-reservas/', views.mis_reservas, name='mis_reservas'),
     path('reservas/<int:pk>/cancelar/', views.cancelar_reserva, name='cancelar_reserva'),
+    path('perfil/', views.perfil, name='perfil'),  # Datos de reserva del usuario autenticado
 
 
 

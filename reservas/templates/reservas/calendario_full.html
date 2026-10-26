@@ -148,6 +148,19 @@
     </div>
     <div class="nota-zona" id="nota-zona">Horarios mostrados en tu zona horaria local (<span id="zona-local"></span>)</div>
 
+    {% if is_authenticated %}
+    {{ reserva_config|json_script:"reserva-config" }}
+    <div style="max-width:1000px; margin:0 auto 20px; padding:10px 14px; background:#eff6ff; border:1px solid #93c5fd; border-radius:8px; font-size:0.95rem;">
+        {% if perfil_completo %}
+            <strong>Datos de reserva guardados:</strong> {{ perfil.resumen }}
+            &mdash; <a href="{% url 'perfil' %}?next={{ request.path|urlencode }}">Cambiar</a>
+        {% else %}
+            Aún no tienes datos de reserva guardados
+            &mdash; <a href="{% url 'perfil' %}?next={{ request.path|urlencode }}">Completar</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
     <!-- Botón para actualizar eventos -->
     <button id="btn-refresh">🔄 Actualizar Reservas y Bloqueos</button>
     
@@ -259,6 +272,13 @@
 
             // === FUNCIÓN CREAR RESERVA CON REPETICIONES ===
             function crearReserva(start, end) {
+                const cfg = JSON.parse(document.getElementById('reserva-config').textContent);
+                if (!cfg.perfilCompleto) {
+                    if (confirm("Aún no tienes datos de reserva guardados. ¿Quieres completarlos ahora?")) {
+                        window.location.href = cfg.perfilUrl;
+                    }
+                    return;
+                }
                 let repeat = prompt("¿Cuántas semanas quieres repetir esta reserva? (0 = solo esta semana)", "0");
                 if (repeat === null) return;
                 repeat = parseInt(repeat);
@@ -267,6 +287,8 @@
                     alert("El máximo de repeticiones es 52 semanas.");
                     return;
                 }
+
+                if (!confirm(`Se reutilizarán tus datos guardados: ${cfg.resumen}\n(No se usa ni se guarda el número completo de tarjeta.) ¿Continuar?`)) return;
 
                 fetch('/api/reservas/crear/', {
                     method: 'POST',
@@ -278,7 +300,8 @@
                         resource_id: resourceId,
                         start_time: start,
                         end_time: end,
-                        repeat_weeks: repeat
+                        repeat_weeks: repeat,
+                        usar_datos_guardados: true
                     })
                 })
                 .then(response => {
@@ -293,6 +316,9 @@
                         alert(`Reserva(s) creada(s) correctamente: ${data.reservas.length} reserva(s).`);
                     } else {
                         alert(data.error || 'Error al crear la reserva.');
+                        if (data.perfil_url && confirm('¿Quieres ir a completar tus datos de reserva?')) {
+                            window.location.href = cfg.perfilUrl;
+                        }
                     }
                     // Exito o rechazo: se recarga para mostrar el estado real del servidor.
                     calendar.refetchEvents();

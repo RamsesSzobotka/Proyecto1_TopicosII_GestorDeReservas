@@ -9,7 +9,8 @@ from django.test import TestCase, Client
 from django.utils import timezone
 
 from . import forecast
-from .models import Availability, Booking, Resource
+from .forms import PerfilReservaForm
+from .models import Availability, Booking, PerfilReserva, Resource
 
 
 def base_futura(hour=10):
@@ -1247,3 +1248,291 @@ class CalendarioFullUxTests(TestCase):
         self.assertFalse(response.json()["success"])
         self.assertTrue(response.json()["error"])
         self.assertEqual(Booking.objects.count(), 1)
+
+# === ISSUE-03: datos de reserva guardados ===
+
+DATOS_PERFIL = {
+    "nombre_completo": "Ana Pérez",
+    "telefono": "+57 300 123 4567",
+    "email_contacto": "ana@example.com",
+    "metodo_pago": "tarjeta",
+    "tarjeta_ultimos4": "1234",
+}
+
+
+def crear_perfil(user, **extra):
+    datos = dict(DATOS_PERFIL)
+    datos.update(extra)
+    return PerfilReserva.objects.create(user=user, **datos)
+
+
+class PerfilReservaModeloFormTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="ana", password="pass1234")
+
+    def test_form_valido_completo(self):
+        form = PerfilReservaForm(DATOS_PERFIL)
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_telefono_invalido(self):
+        form = PerfilReservaForm({**DATOS_PERFIL, "telefono": "abc"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("telefono", form.errors)
+
+    def test_email_invalido(self):
+        form = PerfilReservaForm({**DATOS_PERFIL, "email_contacto": "no-es-correo"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("email_contacto", form.errors)
+
+    def test_tarjeta_sin_ultimos4_da_error(self):
+        form = PerfilReservaForm({**DATOS_PERFIL, "tarjeta_ultimos4": ""})
+        self.assertFalse(form.is_valid())
+        self.assertIn("tarjeta_ultimos4", form.errors)
+
+    def test_ultimos4_con_cinco_digitos_o_letras_da_error(self):
+        for valor in ("12345", "12ab"):
+            form = PerfilReservaForm({**DATOS_PERFIL, "tarjeta_ultimos4": valor})
+            self.assertFalse(form.is_valid(), valor)
+            self.assertIn("tarjeta_ultimos4", form.errors)
+
+    def test_digitos_unicode_no_son_validos(self):
+        # \d aceptaría dígitos de ancho completo o árabe-índicos.
+        for valor in ("１２３４", "١٢٣٤"):
+            form = PerfilReservaForm({**DATOS_PERFIL, "tarjeta_ultimos4": valor})
+            self.assertFalse(form.is_valid(), valor)
+            self.assertIn("tarjeta_ultimos4", form.errors)
+        form = PerfilReservaForm({**DATOS_PERFIL, "telefono": "１２３４５６７"})
+        self.assertFalse(form.is_valid())
+        self.assertIn("telefono", form.errors)
+
+    def test_salto_de_linea_final_no_es_valido_en_el_modelo(self):
+        perfil = PerfilReserva(nombre_completo="Ana", telefono="3001234567", email_contacto="a@b.com",
+                               metodo_pago="tarjeta", tarjeta_ultimos4="123\n")
+        self.assertFalse(perfil.esta_completo())
+
+    def test_en_pista_ignora_ultimos4_con_formato_invalido(self):
+        form = PerfilReservaForm({**DATOS_PERFIL, "metodo_pago": "en_pista", "tarjeta_ultimos4": "abcd"})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.save(commit=False).tarjeta_ultimos4, "")
+
+    def test_en_pista_vacia_ultimos4(self):
+        form = PerfilReservaForm({**DATOS_PERFIL, "metodo_pago": "en_pista", "tarjeta_ultimos4": "9999"})
+        self.assertTrue(form.is_valid(), form.errors)
+        perfil = form.save(commit=False)
+        self.assertEqual(perfil.tarjeta_ultimos4, "")
+
+    def test_esta_completo_y_resumen(self):
+        perfil = crear_perfil(self.user)
+        self.assertTrue(perfil.esta_completo())
+        self.assertEqual(
+            perfil.resumen(),
+            "Ana Pérez · ana@example.com · +57 300 123 4567 · Tarjeta (simulada) •••• 1234",
+        )
+        incompleto = PerfilReserva(user=self.user, nombre_completo="Ana", metodo_pago="tarjeta")
+        self.assertFalse(incompleto.esta_completo())
+        sin_ultimos4 = PerfilReserva(**{**DATOS_PERFIL, "tarjeta_ultimos4": ""}, user=self.user)
+        self.assertFalse(sin_ultimos4.esta_completo())
+
+    def test_modelo_sin_campos_sensibles(self):
+        nombres = {f.name for f in PerfilReserva._meta.get_fields()}
+        for prohibido in ("numero_tarjeta", "cvv", "caducidad"):
+            self.assertNotIn(prohibido, nombres)
+
+
+class PerfilVistaTests(TestCase):
+    URL = "/perfil/"
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="ana", password="pass1234")
+        self.otro = User.objects.create_user(username="beto", password="pass1234")
+
+    def test_anonimo_redirige_a_login(self):
+        response = self.client.get(self.URL)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/login/"))
+        self.assertEqual(self.client.post(self.URL, DATOS_PERFIL).status_code, 302)
+        self.assertEqual(PerfilReserva.objects.count(), 0)
+
+    def test_primer_uso_get_formulario_vacio(self):
+        self.client.force_login(self.user)
+        response = self.client.get(self.URL)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Aún no tienes datos guardados")
+        self.assertContains(response, "Nunca escribas el número completo ni el CVV")
+
+    def test_primer_uso_post_valido_crea_perfil(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.URL, DATOS_PERFIL)
+        self.assertEqual(response.status_code, 302)
+        perfil = PerfilReserva.objects.get(user=self.user)
+        self.assertEqual(perfil.nombre_completo, "Ana Pérez")
+        mensajes = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any("guardaron" in m for m in mensajes))
+
+    def test_post_invalido_no_crea_y_muestra_error(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.URL, {**DATOS_PERFIL, "telefono": "abc"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Introduce un teléfono válido")
+        self.assertEqual(PerfilReserva.objects.count(), 0)
+
+    def test_next_seguro_redirige_y_externo_se_ignora(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.URL, {**DATOS_PERFIL, "next": "/calendario_full/1/"})
+        self.assertRedirects(response, "/calendario_full/1/", fetch_redirect_response=False)
+        response = self.client.post(self.URL, {**DATOS_PERFIL, "next": "https://evil.example/"})
+        self.assertEqual(response["Location"], "/perfil/")
+
+    def test_actualizacion_modifica_el_perfil_existente(self):
+        crear_perfil(self.user)
+        self.client.force_login(self.user)
+        self.client.post(self.URL, {**DATOS_PERFIL, "nombre_completo": "Ana María", "metodo_pago": "en_pista"})
+        self.assertEqual(PerfilReserva.objects.count(), 1)
+        perfil = PerfilReserva.objects.get(user=self.user)
+        self.assertEqual(perfil.nombre_completo, "Ana María")
+        self.assertEqual(perfil.tarjeta_ultimos4, "")
+
+    def test_control_de_acceso_no_ve_ni_modifica_datos_ajenos(self):
+        crear_perfil(self.user)
+        self.client.force_login(self.otro)
+        response = self.client.get(self.URL)
+        self.assertNotContains(response, "Ana Pérez")
+        self.assertNotContains(response, "ana@example.com")
+        self.client.post(self.URL, {**DATOS_PERFIL, "nombre_completo": "Beto", "email_contacto": "beto@example.com"})
+        self.assertEqual(PerfilReserva.objects.get(user=self.user).nombre_completo, "Ana Pérez")
+        self.assertEqual(PerfilReserva.objects.get(user=self.otro).nombre_completo, "Beto")
+
+    def test_no_existe_url_con_id(self):
+        crear_perfil(self.user)
+        self.client.force_login(self.otro)
+        self.assertEqual(self.client.get("/perfil/1/").status_code, 404)
+
+    def test_datos_de_pago_extra_no_se_almacenan(self):
+        self.client.force_login(self.user)
+        self.client.post(self.URL, {**DATOS_PERFIL, "numero_tarjeta": "4111111111111111", "cvv": "987"})
+        perfil = PerfilReserva.objects.get(user=self.user)
+        guardado = " ".join(str(getattr(perfil, f.name)) for f in perfil._meta.concrete_fields)
+        self.assertNotIn("4111111111111111", guardado)
+        self.assertNotIn("987", guardado)
+
+
+class ApiDatosGuardadosTests(TestCase):
+    URL = "/api/reservas/crear/"
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="ana", password="pass1234")
+        self.resource = Resource.objects.create(name="Pista 1")
+        self.inicio = utc(2030, 5, 6, 10)
+        self.client.force_login(self.user)
+
+    def payload(self, horas=0, **extra):
+        inicio = self.inicio + timedelta(hours=horas)
+        data = {
+            "resource_id": self.resource.id,
+            "start_time": inicio.isoformat(),
+            "end_time": (inicio + timedelta(hours=1)).isoformat(),
+            "repeat_weeks": 0,
+        }
+        data.update(extra)
+        return json.dumps(data)
+
+    def post(self, **kwargs):
+        return self.client.post(self.URL, self.payload(**kwargs), content_type="application/json")
+
+    def test_uso_repetido_sin_reenviar_datos(self):
+        perfil = crear_perfil(self.user)
+        r1 = self.post(usar_datos_guardados=True)
+        r2 = self.post(horas=2, usar_datos_guardados=True)
+        for r in (r1, r2):
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(r.json()["success"])
+            self.assertEqual(r.json()["datos_usados"], perfil.resumen())
+        self.assertEqual(Booking.objects.filter(user=self.user).count(), 2)
+
+    def test_sin_perfil_devuelve_400_y_no_crea(self):
+        response = self.post(usar_datos_guardados=True)
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.json()["success"])
+        self.assertEqual(response.json()["perfil_url"], "/perfil/")
+        self.assertIn("Completa tus datos de reserva", response.json()["error"])
+        self.assertEqual(Booking.objects.count(), 0)
+
+    def test_perfil_incompleto_devuelve_400_y_no_crea(self):
+        PerfilReserva.objects.create(user=self.user, nombre_completo="Ana", metodo_pago="tarjeta")
+        response = self.post(usar_datos_guardados=True)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["perfil_url"], "/perfil/")
+        self.assertEqual(Booking.objects.count(), 0)
+
+    def test_actualizacion_se_refleja_en_la_siguiente_reserva(self):
+        crear_perfil(self.user)
+        self.client.post("/perfil/", {**DATOS_PERFIL, "nombre_completo": "Ana María", "metodo_pago": "en_pista"})
+        response = self.post(usar_datos_guardados=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Ana María", response.json()["datos_usados"])
+        self.assertIn("Pago en la pista", response.json()["datos_usados"])
+
+    def test_flag_no_booleano_devuelve_400(self):
+        crear_perfil(self.user)
+        for valor in ("true", 1, None, [True]):
+            response = self.post(usar_datos_guardados=valor)
+            self.assertEqual(response.status_code, 400, valor)
+        self.assertEqual(Booking.objects.count(), 0)
+
+    def test_sin_flag_o_false_comportamiento_previo(self):
+        response = self.post()
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("datos_usados", response.json())
+        response = self.post(horas=2, usar_datos_guardados=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("datos_usados", response.json())
+
+    def test_ignora_datos_de_pago_en_el_cuerpo(self):
+        crear_perfil(self.user)
+        response = self.post(usar_datos_guardados=True, numero_tarjeta="4111111111111111", cvv="987")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("4111111111111111", json.dumps(response.json()))
+        self.assertEqual(PerfilReserva.objects.get(user=self.user).tarjeta_ultimos4, "1234")
+
+    def test_usa_solo_el_perfil_del_usuario_autenticado(self):
+        crear_perfil(self.user)
+        otro = User.objects.create_user(username="beto", password="pass1234")
+        self.client.force_login(otro)
+        response = self.post(usar_datos_guardados=True)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Booking.objects.count(), 0)
+
+
+class CalendarioDatosGuardadosTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="ana", password="pass1234")
+        self.otro = User.objects.create_user(username="beto", password="pass1234")
+        self.resource = Resource.objects.create(name="Pista 1")
+        self.url = f"/calendario_full/{self.resource.id}/"
+
+    def test_con_perfil_completo_muestra_resumen(self):
+        perfil = crear_perfil(self.user)
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        self.assertContains(response, "Datos de reserva guardados")
+        self.assertContains(response, perfil.resumen())
+
+    def test_sin_perfil_muestra_aviso_de_completar(self):
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        self.assertContains(response, "Aún no tienes datos de reserva guardados")
+        self.assertContains(response, "/perfil/?next=")
+
+    def test_resumen_de_otro_usuario_no_aparece(self):
+        crear_perfil(self.user)
+        self.client.force_login(self.otro)
+        response = self.client.get(self.url)
+        self.assertNotContains(response, "Ana Pérez")
+        self.assertNotContains(response, "ana@example.com")
+        self.assertContains(response, "Aún no tienes datos de reserva guardados")
+
+    def test_anonimo_no_ve_recuadro(self):
+        crear_perfil(self.user)
+        response = self.client.get(self.url)
+        self.assertNotContains(response, "Ana Pérez")
+        self.assertNotContains(response, "Datos de reserva guardados")

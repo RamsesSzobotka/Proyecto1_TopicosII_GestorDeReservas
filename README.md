@@ -119,3 +119,11 @@ Los usuarios autenticados tienen la página **Mis reservas** (`/mis-reservas/`, 
 - **Administradores:** un usuario `is_staff` puede cancelar cualquier reserva (también ajena) mientras no haya empezado, sin el margen de 2 horas, con `POST /reservas/<id>/cancelar/`.
 - **Series:** las reservas creadas con repetición semanal comparten un identificador de serie. Se puede cancelar **solo una ocurrencia** (`alcance=una`) o **esa y las siguientes** de la serie (`alcance=serie`); en ese caso solo se cancelan las futuras que sigan activas y cumplan el límite.
 - **Seguridad:** la cancelación es solo `POST` con token CSRF y exige sesión. Una reserva inexistente o ajena (para un usuario que no es administrador) responde el mismo `404`, sin revelar si existe.
+## Datos de reserva guardados
+
+Cada usuario autenticado puede guardar en `/perfil/` sus datos de reserva para no rellenarlos en cada compra:
+
+- **Se guarda:** nombre completo, teléfono, correo de contacto, método de pago (pago en la pista o tarjeta simulada) y, solo si elige tarjeta, los **4 últimos dígitos** como referencia.
+- **NUNCA se guarda:** número completo de tarjeta, CVV ni fecha de caducidad. El pago es simulado.
+- El calendario muestra qué datos se reutilizan y pide confirmación antes de reservar. Si faltan datos, redirige a `/perfil/`.
+- Cada usuario solo puede ver y modificar sus propios datos (no hay URLs con id). Los datos no se exponen en el panel de administración.
