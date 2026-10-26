@@ -25,6 +25,28 @@
             border-radius: 10px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
+        .leyenda {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px 18px;
+            margin: 0 10px 10px;
+            font-size: 0.9rem;
+        }
+        .leyenda .item { display: inline-flex; align-items: center; gap: 6px; }
+        .leyenda .muestra {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            border: 1px solid #9ca3af;
+        }
+        .nota-zona {
+            text-align: center;
+            font-size: 0.85rem;
+            color: #4b5563;
+            margin-bottom: 10px;
+        }
         #btn-refresh {
             display: block;
             margin: 20px auto;
@@ -117,6 +139,15 @@
     </div>
     {% endif %}
 
+    <!-- Leyenda de estados -->
+    <div class="leyenda" id="leyenda">
+        <span class="item"><span class="muestra" style="background:#fff;"></span> Disponible (horario 09:00-21:00)</span>
+        <span class="item"><span class="muestra" style="background:#10b981; border-color:#10b981;"></span> Ocupado (reserva)</span>
+        <span class="item"><span class="muestra" style="background:#2563eb; border-color:#2563eb;"></span> Tu reserva</span>
+        <span class="item"><span class="muestra" style="background:#ef4444; border-color:#ef4444;"></span> Bloqueado por el administrador</span>
+    </div>
+    <div class="nota-zona" id="nota-zona">Horarios mostrados en tu zona horaria local (<span id="zona-local"></span>)</div>
+
     <!-- Botón para actualizar eventos -->
     <button id="btn-refresh">🔄 Actualizar Reservas y Bloqueos</button>
     
@@ -133,6 +164,10 @@
             const calendarElement = document.getElementById('calendar');
             const resourceId = calendarElement.dataset.resourceId;
             const userLogged = calendarElement.dataset.userLogged === "True";
+
+            // Zona horaria del navegador: las fechas se envian al servidor con su offset.
+            document.getElementById('zona-local').textContent =
+                Intl.DateTimeFormat().resolvedOptions().timeZone;
 
             // Los eventos se leen del calendario ya cargado, para que el refresco
             // traiga los bloqueos y reservas mas recientes (ISSUE-07).
@@ -159,7 +194,22 @@
             var calendar = new FullCalendar.Calendar(calendarElement, {
                 initialView: 'timeGridWeek',
                 locale: 'es',
+                headerToolbar: {
+                    left: 'prev,next today',
+                    center: 'title',
+                    right: 'dayGridMonth,timeGridWeek,timeGridDay'
+                },
                 selectable: true,
+                // No se reservan dias completos: solo franjas horarias.
+                selectAllow: function(info) {
+                    return !info.allDay;
+                },
+                // En la vista de mes, un clic en el dia abre su detalle por horas.
+                dateClick: function(info) {
+                    if (info.view.type === 'dayGridMonth') {
+                        calendar.changeView('timeGridDay', info.date);
+                    }
+                },
                 slotMinTime: "09:00:00", // Horario inicial
                 slotMaxTime: "21:00:00", // Horario final
                 slotDuration: "01:00:00",
@@ -213,6 +263,10 @@
                 if (repeat === null) return;
                 repeat = parseInt(repeat);
                 if (isNaN(repeat) || repeat < 0) repeat = 0;
+                if (repeat > 52) {
+                    alert("El máximo de repeticiones es 52 semanas.");
+                    return;
+                }
 
                 fetch('/api/reservas/crear/', {
                     method: 'POST',
@@ -227,16 +281,27 @@
                         repeat_weeks: repeat
                     })
                 })
-                .then(response => response.json())
+                .then(response => {
+                    const tipo = response.headers.get('content-type') || '';
+                    if (!tipo.includes('application/json')) {
+                        return { success: false, error: 'No se pudo crear la reserva (respuesta inesperada del servidor, código ' + response.status + ').' };
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     if (data.success) {
                         alert(`Reserva(s) creada(s) correctamente: ${data.reservas.length} reserva(s).`);
-                        calendar.refetchEvents();
                     } else {
                         alert(data.error || 'Error al crear la reserva.');
                     }
+                    // Exito o rechazo: se recarga para mostrar el estado real del servidor.
+                    calendar.refetchEvents();
                 })
-                .catch(error => console.error('Error:', error));
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('No se pudo contactar con el servidor. Inténtalo de nuevo.');
+                    calendar.refetchEvents();
+                });
             }
 
             // Función para obtener CSRF

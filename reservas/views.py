@@ -230,23 +230,73 @@ def logout_view(request):
     logout(request)
     return redirect('/login/')
 
+def _rango_eventos(request):
+    """
+    Lee el rango opcional ?start=&end= que envía FullCalendar (ISO 8601 con offset).
+    Devuelve (inicio, fin, error): si faltan ambos, (None, None, None); si alguno es
+    inválido o no lleva zona horaria, error es una JsonResponse 400.
+    """
+    crudo_inicio = request.GET.get('start')
+    crudo_fin = request.GET.get('end')
+    if crudo_inicio is None and crudo_fin is None:
+        return None, None, None
+
+    valores = []
+    for crudo in (crudo_inicio, crudo_fin):
+        try:
+            # Un '+' sin codificar en la query llega como espacio.
+            valor = parse_datetime(crudo.strip().replace(' ', '+')) if crudo else None
+        except ValueError:
+            valor = None
+        if valor is None or timezone.is_naive(valor):
+            return None, None, JsonResponse(
+                {'error': 'Los parámetros start y end deben ser fechas ISO 8601 con zona horaria.'},
+                status=400,
+            )
+        valores.append(valor)
+    if valores[0] >= valores[1]:
+        return None, None, JsonResponse(
+            {'error': 'El parámetro start debe ser anterior a end.'},
+            status=400,
+        )
+    return valores[0], valores[1], None
+
+
 def api_reservas(request, resource_id):
     """
-    API que devuelve todas las reservas de un recurso en formato JSON.
+    API que devuelve las reservas de un recurso en formato JSON.
+    Acepta ?start=&end= para limitar a las que solapan [start, end).
+    Privacidad: el titular y el staff ven el nombre; el resto solo "Ocupado".
     """
+    if not Resource.objects.filter(id=resource_id).exists():
+        return JsonResponse({'error': 'Recurso no encontrado.'}, status=404)
+    inicio, fin, error = _rango_eventos(request)
+    if error:
+        return error
     reservas = Booking.objects.filter(
         resource_id=resource_id, estado=Booking.Estado.ACTIVA
-    ).select_related('user').order_by('start_time')
-    eventos = [
-        {
-            "title": f"Reservado por {reserva.user.username}",
+    ).order_by('start_time')
+    if inicio and fin:
+        reservas = reservas.filter(start_time__lt=fin, end_time__gt=inicio)
+
+    def datos(reserva):
+        propia = request.user.is_authenticated and reserva.user_id == request.user.id
+        if propia:
+            titulo, color = "Tu reserva", "#2563eb"  # Azul
+        elif request.user.is_staff:
+            titulo, color = f"Reservado por {reserva.user.username}", "#10b981"
+        else:
+            titulo, color = "Ocupado", "#10b981"  # Verde
+        return {
+            "title": titulo,
             "start": reserva.start_time.isoformat(),
             "end": reserva.end_time.isoformat(),
-            "color": "#10b981",  # Verde
+            "color": color,
             "kind": "reserva",
+            "propia": propia,
         }
-        for reserva in reservas
-    ]
+
+    eventos = [datos(reserva) for reserva in reservas.select_related('user')]
     return JsonResponse(eventos, safe=False)
 
 
@@ -256,7 +306,14 @@ def api_bloqueos(request, resource_id):
     para el calendario del cliente. Al servirse por URL (y no embebido en el
     HTML), el calendario refleja los cambios de bloqueos al refrescar.
     """
+    if not Resource.objects.filter(id=resource_id).exists():
+        return JsonResponse({'error': 'Recurso no encontrado.'}, status=404)
+    inicio, fin, error = _rango_eventos(request)
+    if error:
+        return error
     bloqueos = Availability.objects.filter(resource_id=resource_id).order_by('start_time')
+    if inicio and fin:
+        bloqueos = bloqueos.filter(start_time__lt=fin, end_time__gt=inicio)
     eventos = [
         {
             "title": "Bloqueado",

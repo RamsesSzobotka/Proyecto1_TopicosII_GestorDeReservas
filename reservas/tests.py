@@ -1059,3 +1059,191 @@ class EnlaceMisReservasTests(CancelacionBase):
         self.assertContains(response, "Estado")
         self.assertContains(response, "Serie")
         self.assertContains(response, str(r.serie)[:8])
+
+
+class CalendarioEventosApiTests(TestCase):
+    """ISSUE-04: serialización, aislamiento, rangos y privacidad de las APIs del calendario."""
+
+    def setUp(self):
+        self.resource = Resource.objects.create(name="Pista 1")
+        self.otro = Resource.objects.create(name="Pista 2")
+        self.dueno = User.objects.create_user(username="dueno", password="pass1234")
+        self.extra = User.objects.create_user(username="extra", password="pass1234")
+        self.staff = User.objects.create_user(username="admin1", password="pass1234", is_staff=True)
+        self.inicio = utc(2030, 1, 10, 10)
+        self.fin = utc(2030, 1, 10, 11)
+        self.reserva = Booking.objects.create(
+            user=self.dueno, resource=self.resource, start_time=self.inicio, end_time=self.fin
+        )
+        self.url_r = f"/api/reservas/{self.resource.id}/"
+        self.url_b = f"/api/bloqueos/{self.resource.id}/"
+
+    # --- Serialización ---
+    def test_serializa_reserva_con_campos_exactos(self):
+        self.client.force_login(self.extra)
+        evento = self.client.get(self.url_r).json()[0]
+        self.assertEqual(evento["title"], "Ocupado")
+        self.assertEqual(evento["start"], "2030-01-10T10:00:00+00:00")
+        self.assertEqual(evento["end"], "2030-01-10T11:00:00+00:00")
+        self.assertEqual(evento["color"], "#10b981")
+        self.assertEqual(evento["kind"], "reserva")
+        self.assertFalse(evento["propia"])
+
+    def test_serializa_bloqueo_con_campos_exactos(self):
+        Availability.objects.create(resource=self.resource, start_time=self.inicio, end_time=self.fin)
+        evento = self.client.get(self.url_b).json()[0]
+        self.assertEqual(evento["title"], "Bloqueado")
+        self.assertEqual(evento["start"], "2030-01-10T10:00:00+00:00")
+        self.assertEqual(evento["end"], "2030-01-10T11:00:00+00:00")
+        self.assertEqual(evento["color"], "#ef4444")
+        self.assertEqual(evento["kind"], "bloqueo")
+
+    # --- Aislamiento por recurso ---
+    def test_reservas_de_otro_recurso_no_aparecen(self):
+        Booking.objects.create(user=self.extra, resource=self.otro, start_time=self.inicio, end_time=self.fin)
+        self.assertEqual(len(self.client.get(self.url_r).json()), 1)
+
+    def test_bloqueos_de_otro_recurso_no_aparecen(self):
+        Availability.objects.create(resource=self.otro, start_time=self.inicio, end_time=self.fin)
+        self.assertEqual(self.client.get(self.url_b).json(), [])
+
+    # --- Recurso inexistente ---
+    def test_recurso_inexistente_devuelve_404_json(self):
+        for url in ("/api/reservas/99999/", "/api/bloqueos/99999/"):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 404)
+            self.assertIn("error", response.json())
+
+    # --- Rangos ---
+    def rango(self, url, start, end):
+        return self.client.get(url, {"start": start, "end": end})
+
+    def test_rango_incluye_evento_dentro_y_excluye_fuera(self):
+        dentro = self.rango(self.url_r, "2030-01-10T00:00:00+00:00", "2030-01-11T00:00:00+00:00")
+        self.assertEqual(len(dentro.json()), 1)
+        fuera = self.rango(self.url_r, "2030-01-11T00:00:00+00:00", "2030-01-12T00:00:00+00:00")
+        self.assertEqual(fuera.json(), [])
+
+    def test_rango_frontera_exacta_se_excluye_y_solape_parcial_se_incluye(self):
+        # El rango termina justo cuando empieza la reserva: no solapa.
+        self.assertEqual(self.rango(self.url_r, "2030-01-10T09:00:00+00:00", "2030-01-10T10:00:00+00:00").json(), [])
+        # El rango empieza justo cuando termina la reserva: no solapa.
+        self.assertEqual(self.rango(self.url_r, "2030-01-10T11:00:00+00:00", "2030-01-10T12:00:00+00:00").json(), [])
+        # Solape parcial: se incluye.
+        self.assertEqual(len(self.rango(self.url_r, "2030-01-10T10:30:00+00:00", "2030-01-10T12:00:00+00:00").json()), 1)
+
+    def test_rango_aplica_tambien_a_bloqueos(self):
+        Availability.objects.create(resource=self.resource, start_time=self.inicio, end_time=self.fin)
+        self.assertEqual(len(self.rango(self.url_b, "2030-01-10T10:30:00+00:00", "2030-01-10T12:00:00+00:00").json()), 1)
+        self.assertEqual(self.rango(self.url_b, "2030-01-10T11:00:00+00:00", "2030-01-10T12:00:00+00:00").json(), [])
+
+    def test_sin_parametros_devuelve_todo(self):
+        Booking.objects.create(
+            user=self.extra, resource=self.resource, start_time=utc(2031, 5, 1, 9), end_time=utc(2031, 5, 1, 10)
+        )
+        self.assertEqual(len(self.client.get(self.url_r).json()), 2)
+
+    def test_parametros_invalidos_devuelven_400(self):
+        for url in (self.url_r, self.url_b):
+            self.assertEqual(self.rango(url, "no-es-fecha", "2030-01-11T00:00:00+00:00").status_code, 400)
+            self.assertEqual(self.client.get(url, {"start": "2030-01-10T00:00:00+00:00"}).status_code, 400)
+            self.assertEqual(self.rango(url, "", "").status_code, 400)
+
+    def test_rango_invertido_o_vacio_devuelve_400(self):
+        for url in (self.url_r, self.url_b):
+            invertido = self.rango(url, "2030-01-11T00:00:00+00:00", "2030-01-10T00:00:00+00:00")
+            self.assertEqual(invertido.status_code, 400)
+            self.assertIn("error", invertido.json())
+            vacio = self.rango(url, "2030-01-10T00:00:00+00:00", "2030-01-10T00:00:00+00:00")
+            self.assertEqual(vacio.status_code, 400)
+
+    def test_fechas_naive_devuelven_400(self):
+        for url in (self.url_r, self.url_b):
+            response = self.rango(url, "2030-01-10T00:00:00", "2030-01-11T00:00:00")
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("error", response.json())
+
+    def test_mas_sin_codificar_llega_como_espacio_y_funciona(self):
+        # Un '+' sin codificar en la query string llega al servidor como espacio.
+        response = self.client.get(
+            self.url_r + "?start=2030-01-10T00:00:00+02:00&end=2030-01-11T00:00:00+02:00"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 1)
+
+    # --- Privacidad ---
+    def test_anonimo_y_otro_usuario_ven_ocupado_sin_username(self):
+        anonimo = self.client.get(self.url_r)
+        self.assertEqual(anonimo.json()[0]["title"], "Ocupado")
+        self.assertNotIn("dueno", anonimo.content.decode())
+        self.client.force_login(self.extra)
+        otro = self.client.get(self.url_r)
+        self.assertEqual(otro.json()[0]["title"], "Ocupado")
+        self.assertNotIn("dueno", otro.content.decode())
+
+    def test_propietario_ve_tu_reserva(self):
+        self.client.force_login(self.dueno)
+        evento = self.client.get(self.url_r).json()[0]
+        self.assertEqual(evento["title"], "Tu reserva")
+        self.assertTrue(evento["propia"])
+
+    def test_staff_ve_el_username(self):
+        self.client.force_login(self.staff)
+        self.assertEqual(self.client.get(self.url_r).json()[0]["title"], "Reservado por dueno")
+
+    def test_staff_titular_ve_tu_reserva(self):
+        # Ser titular tiene prioridad sobre ser staff.
+        Booking.objects.create(
+            user=self.staff, resource=self.resource, start_time=utc(2030, 1, 11, 10), end_time=utc(2030, 1, 11, 11)
+        )
+        self.client.force_login(self.staff)
+        titulos = [e["title"] for e in self.client.get(self.url_r).json()]
+        self.assertEqual(titulos, ["Reservado por dueno", "Tu reserva"])
+
+
+class CalendarioFullUxTests(TestCase):
+    """ISSUE-04: leyenda, zona horaria, vistas y manejo de conflictos en el cliente y el servidor."""
+
+    def setUp(self):
+        self.resource = Resource.objects.create(name="Pista 1")
+        self.user = User.objects.create_user(username="tester", password="pass1234")
+        self.rival = User.objects.create_user(username="rival", password="pass1234")
+
+    def test_pagina_incluye_leyenda_zona_horaria_y_vistas(self):
+        response = self.client.get(f"/calendario_full/{self.resource.id}/")
+        self.assertContains(response, "Disponible (horario 09:00-21:00)")
+        self.assertContains(response, "Ocupado (reserva)")
+        self.assertContains(response, "Tu reserva")
+        self.assertContains(response, "Bloqueado por el administrador")
+        self.assertContains(response, "Horarios mostrados en tu zona horaria local")
+        self.assertContains(response, "dayGridMonth,timeGridWeek,timeGridDay")
+        self.assertContains(response, "selectAllow")
+
+    def test_pagina_refresca_eventos_tras_respuesta_del_servidor(self):
+        response = self.client.get(f"/calendario_full/{self.resource.id}/")
+        html = response.content.decode()
+        bloque = html[html.index("function crearReserva"):html.index("function getCookie")]
+        self.assertIn("calendar.refetchEvents()", bloque)
+        self.assertIn("content-type", bloque)
+        self.assertIn("52", bloque)
+
+    def test_conflicto_concurrente_sigue_rechazado_por_el_servidor(self):
+        # El usuario cargó el calendario con la franja libre; otro reserva antes del POST.
+        inicio = base_futura()
+        fin = inicio + timedelta(hours=1)
+        Booking.objects.create(user=self.rival, resource=self.resource, start_time=inicio, end_time=fin)
+        self.client.force_login(self.user)
+        response = self.client.post(
+            "/api/reservas/crear/",
+            json.dumps({
+                "resource_id": self.resource.id,
+                "start_time": inicio.isoformat(),
+                "end_time": fin.isoformat(),
+                "repeat_weeks": 0,
+            }),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(response.json()["success"])
+        self.assertTrue(response.json()["error"])
+        self.assertEqual(Booking.objects.count(), 1)
