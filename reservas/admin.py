@@ -1,4 +1,5 @@
 from django.contrib import admin, messages
+from django.utils import timezone
 from .models import Resource, Availability, Booking
 
 # --- CONFIGURACIÓN DEL PANEL ADMIN ---
@@ -36,6 +37,17 @@ class AvailabilityAdmin(admin.ModelAdmin):
 
 @admin.register(Booking)
 class BookingAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'resource', 'start_time', 'end_time', 'created_at')
-    list_filter = ('resource', 'user')
+    list_display = ('id', 'user', 'resource', 'start_time', 'end_time', 'estado', 'serie', 'created_at')
+    list_filter = ('resource', 'user', 'estado')
     search_fields = ('user__username', 'resource__name')
+    readonly_fields = ('cancelada_en', 'cancelada_por', 'serie')
+
+    def save_model(self, request, obj, form, change):
+        """Registra quién y cuándo canceló si el admin cambia el estado a mano."""
+        if obj.estado == Booking.Estado.CANCELADA and obj.cancelada_en is None:
+            obj.cancelada_en = timezone.now()
+            obj.cancelada_por = request.user
+        elif obj.estado == Booking.Estado.ACTIVA:
+            obj.cancelada_en = None
+            obj.cancelada_por = None
+        super().save_model(request, obj, form, change)

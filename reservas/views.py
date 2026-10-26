@@ -1,9 +1,10 @@
 import json
+import uuid
 from datetime import datetime, timedelta, time
 from django.db import IntegrityError, transaction
 from django.core.exceptions import ValidationError
 from django.shortcuts import render, get_object_or_404, redirect
-from django.http import JsonResponse
+from django.http import Http404, JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils import timezone
 from django.utils.dateformat import format as date_format
@@ -11,9 +12,10 @@ from django.utils.dateparse import parse_datetime
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
-from django.views.decorators.http import require_GET
+from django.contrib.auth.decorators import login_required
+from django.views.decorators.http import require_GET, require_POST
 from . import forecast
-from .models import Resource, Booking, Availability
+from .models import Resource, Booking, Availability, LIMITE_CANCELACION
 
 
 # Horario por defecto (si no hay Availability definida)
@@ -33,6 +35,7 @@ def calendario(request, resource_id):
 
     reservas = Booking.objects.filter(
         resource=resource,
+        estado=Booking.Estado.ACTIVA,
         start_time__date__gte=inicio_semana,
         start_time__date__lte=inicio_semana + timedelta(days=6)
     ).order_by('start_time')
@@ -67,6 +70,7 @@ def calendario_navegable(request, resource_id):
 
     reservas = Booking.objects.filter(
         resource=resource,
+        estado=Booking.Estado.ACTIVA,
         start_time__date__gte=inicio_semana,
         start_time__date__lte=inicio_semana + timedelta(days=6)
     ).order_by('start_time')
@@ -165,6 +169,8 @@ def api_crear_reserva(request):
     # Todo-o-nada: chequeos de conflicto y creación dentro de la misma
     # transacción. IntegrityError (carrera concurrente sobre unique_together)
     # se traduce a 409 y revierte la serie completa.
+    # Las ocurrencias de una reserva recurrente comparten un identificador de serie.
+    serie = uuid.uuid4() if repeat_weeks > 0 else None
     reservas_creadas = []
     try:
         with transaction.atomic():
@@ -174,7 +180,8 @@ def api_crear_reserva(request):
                         'success': False,
                         'error': f'Conflicto: hay un bloqueo en la semana {i + 1} ({start}).'
                     }, status=409)
-                if Booking.objects.filter(resource=resource, start_time__lt=end, end_time__gt=start).exists():
+                if Booking.objects.filter(resource=resource, estado=Booking.Estado.ACTIVA,
+                                          start_time__lt=end, end_time__gt=start).exists():
                     return JsonResponse({
                         'success': False,
                         'error': f'Conflicto: hay una reserva en la semana {i + 1} ({start}).'
@@ -185,7 +192,8 @@ def api_crear_reserva(request):
                     user=request.user,
                     resource=resource,
                     start_time=start,
-                    end_time=end
+                    end_time=end,
+                    serie=serie
                 )
                 reservas_creadas.append({
                     'start': start.isoformat(),
@@ -226,7 +234,9 @@ def api_reservas(request, resource_id):
     """
     API que devuelve todas las reservas de un recurso en formato JSON.
     """
-    reservas = Booking.objects.filter(resource_id=resource_id).order_by('start_time')
+    reservas = Booking.objects.filter(
+        resource_id=resource_id, estado=Booking.Estado.ACTIVA
+    ).select_related('user').order_by('start_time')
     eventos = [
         {
             "title": f"Reservado por {reserva.user.username}",
@@ -348,3 +358,105 @@ def prevision_demanda(request):
         ],
     }
     return render(request, 'reservas/prevision.html', contexto)
+
+
+def _anotar_serie(reservas):
+    """
+    Añade a cada reserva ``serie_n`` y ``serie_m`` (ocurrencia N de M) cuando
+    pertenece a una serie. N y M se calculan por orden de start_time dentro de
+    la serie contando todas las ocurrencias, también las canceladas.
+    """
+    series = {r.serie for r in reservas if r.serie}
+    posiciones = {}
+    totales = {}
+    if series:
+        filas = Booking.objects.filter(serie__in=series).order_by('start_time', 'pk').values_list('pk', 'serie')
+        for pk, serie in filas:
+            totales[serie] = totales.get(serie, 0) + 1
+            posiciones[pk] = totales[serie]
+    for r in reservas:
+        r.serie_n = posiciones.get(r.pk) if r.serie else None
+        r.serie_m = totales.get(r.serie) if r.serie else None
+    return reservas
+
+
+@login_required(login_url='login')
+@require_GET
+def mis_reservas(request):
+    """
+    Reservas del usuario autenticado (ISSUE-06): próximas activas primero y
+    luego el historial (pasadas y canceladas). Solo lista las del propio usuario.
+    """
+    ahora = timezone.now()
+    todas = list(
+        Booking.objects.filter(user=request.user).select_related('resource')
+        .order_by('start_time', 'pk')
+    )
+    _anotar_serie(todas)
+    for r in todas:
+        r.cancelable, r.motivo_no_cancelable = r.puede_cancelar(request.user, ahora)
+        r.en_curso = r.estado == Booking.Estado.ACTIVA and r.start_time <= ahora < r.end_time
+    proximas = [r for r in todas if r.estado == Booking.Estado.ACTIVA and r.end_time > ahora]
+    historial = [r for r in todas if r not in proximas]
+    historial.sort(key=lambda r: r.start_time, reverse=True)
+    return render(request, 'reservas/mis_reservas.html', {
+        'proximas': proximas,
+        'historial': historial,
+        'limite_horas': int(LIMITE_CANCELACION.total_seconds() // 3600),
+    })
+
+
+@require_POST
+@login_required(login_url='login')
+def cancelar_reserva(request, pk):
+    """
+    Cancela una reserva (ISSUE-06). Solo POST (con CSRF) y con sesión.
+
+    ``alcance``: ``una`` (por defecto) o ``serie`` (esta y las siguientes
+    ocurrencias activas de la serie que cumplan el límite). El propietario o un
+    administrador pueden cancelar; para cualquier otro usuario, una reserva
+    ajena responde 404 igual que una inexistente, sin revelar que existe.
+    """
+    ahora = timezone.now()
+    with transaction.atomic():
+        candidatas = Booking.objects.select_for_update().select_related('resource')
+        if not request.user.is_staff:
+            candidatas = candidatas.filter(user=request.user)
+        reserva = candidatas.filter(pk=pk).first()
+        if reserva is None:
+            raise Http404('Reserva no encontrada.')
+
+        alcance = request.POST.get('alcance', 'una')
+        if alcance not in ('una', 'serie'):
+            messages.error(request, 'El alcance de la cancelación no es válido.')
+            return redirect('mis_reservas')
+
+        puede, motivo = reserva.puede_cancelar(request.user, ahora)
+        if not puede:
+            messages.error(request, f'No se pudo cancelar la reserva: {motivo}')
+            return redirect('mis_reservas')
+
+        reserva.cancelar(request.user, ahora)
+        canceladas = 1
+        omitidas = 0
+        if alcance == 'serie' and reserva.serie:
+            siguientes = Booking.objects.select_for_update().filter(
+                serie=reserva.serie, user_id=reserva.user_id,
+                estado=Booking.Estado.ACTIVA, start_time__gt=reserva.start_time,
+            ).order_by('start_time')
+            for otra in siguientes:
+                if otra.puede_cancelar(request.user, ahora)[0]:
+                    otra.cancelar(request.user, ahora)
+                    canceladas += 1
+                else:
+                    omitidas += 1
+
+    fecha = reserva.start_time.strftime('%d/%m/%Y %H:%M')
+    if alcance == 'serie' and reserva.serie:
+        texto = f'Se cancelaron {canceladas} reserva(s) de la serie de {reserva.resource.name}, desde el {fecha} UTC.'
+        if omitidas:
+            texto += f' {omitidas} no se cancelaron porque no cumplen el límite de cancelación.'
+    else:
+        texto = f'Se canceló la reserva de {reserva.resource.name} del {fecha} UTC.'
+    messages.success(request, texto)
+    return redirect('mis_reservas')
