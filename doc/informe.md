@@ -2,12 +2,13 @@
 
 **Repositorio:** [Proyecto1_TopicosII_GestorDeReservas](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas) (privado)
 **Rama principal:** `main`
-**Stack:** Django 5.2.4 (Python), SQLite, plantillas Django + Tailwind/FullCalendar/Chart.js por CDN
+**Stack:** Django 5.2.4 (Python), SQLite, plantillas Django + CSS propio, FullCalendar,
+Chart.js, Bootstrap Icons y SweetAlert2 por CDN
 **Tablero Kanban:** https://github.com/users/RamsesSzobotka/projects/4
 
 Sistema web para reservar pistas y salas: calendario de disponibilidad, reservas únicas y
 recurrentes, bloqueos administrativos, perfil con datos guardados, autogestión/cancelación
-de reservas y previsión de demanda para administradores.
+de reservas, previsión de demanda para administradores y una interfaz visual unificada.
 
 ---
 
@@ -38,7 +39,7 @@ de reservas y previsión de demanda para administradores.
 | [#1](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/issues/1) Estabilizar la línea base | Fundación técnica | Cerrado | Ramses Szobotka (@RamsesSzobotka) | [#10](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/pull/10) |
 | [#2](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/issues/2) Endurecer reservas y recurrencia | Reserva central | Cerrado | Ramses Szobotka (@RamsesSzobotka) | [#11](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/pull/11) |
 | [#8](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/issues/8) Suite de pruebas y regresión | Calidad / QA | Cerrado | Cesar Garcia (@CesarGarcia08) | [#18](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/pull/18) |
-| [#9](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/issues/9) Documentar en README.md | Documentación | **Abierto** | Gerald (@Gerxld) | Sin PR (en curso) |
+| [#9](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/issues/9) Rediseñar la interfaz de la aplicación | Interfaz / diseño | Cerrado | Gerald (@Gerxld) | [#19](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/pull/19) |
 
 ---
 
@@ -48,9 +49,10 @@ de reservas y previsión de demanda para administradores.
 |---|---|
 | Ramses Szobotka (@RamsesSzobotka) | #1, #2, #7 |
 | Cesar Garcia (@CesarGarcia08) | #3, #4, #8 |
-| Gerald (@Gerxld) | #5, #6 (resueltos) y #9 (en curso) |
+| Gerald (@Gerxld) | #5, #6 y #9 |
 
-Issues cerrados con PR fusionado: 8 de 9. El único pendiente es el #9 (README).
+Issues cerrados con PR fusionado: 9 de 9. El #9 cerró el rediseño visual de la aplicación
+mediante el PR #19.
 
 ---
 
@@ -62,7 +64,29 @@ Issues cerrados con PR fusionado: 8 de 9. El único pendiente es el #9 (README).
 | [`doc/PRUEBAS.md`](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/blob/main/doc/PRUEBAS.md) | Comandos, resultados reales y matriz criterio → test |
 | [`doc/PRUEBAS_E2E_PLAYWRIGHT.md`](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/blob/main/doc/PRUEBAS_E2E_PLAYWRIGHT.md) | Pruebas end-to-end manuales en navegador |
 | [`doc/ISSUE_PLAN.md`](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/blob/main/doc/ISSUE_PLAN.md) | Plan original de issues, dependencias y rotación de roles |
-| [`doc/capturas/`](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/tree/main/doc/capturas) | Capturas de evidencia de pruebas |
+| [`doc/capturas/`](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/tree/main/doc/capturas) | Capturas de evidencia de pruebas y del rediseño de interfaz del issue #9 |
+
+### Cambios del issue #9 — Rediseño de interfaz
+
+El issue #9 se reorientó desde la documentación del README al rediseño visual de la
+aplicación y quedó cerrado con el [PR #19](https://github.com/RamsesSzobotka/Proyecto1_TopicosII_GestorDeReservas/pull/19).
+Los cambios principales fueron:
+
+- Se creó una hoja de estilos compartida en `reservas/static/css/style.css`, con variables
+  de color, tipografía, tarjetas, tablas, badges, alertas, botones y formularios.
+- `base.html` pasó a ser el layout común, con navbar, estado activo, mensajes flash y
+  bloques compartidos para las siete plantillas de la aplicación.
+- Se rediseñaron las vistas de inicio, login, calendario, mis reservas, perfil y previsión,
+  manteniendo los textos, la lógica de negocio y los flujos existentes.
+- Se sustituyeron emojis y glifos de flecha por iconos de Bootstrap Icons.
+- Se reemplazaron las llamadas nativas `alert()`, `confirm()` y `prompt()` por diálogos
+  SweetAlert2, incluyendo confirmaciones para crear y cancelar reservas y cancelar series.
+- Se añadieron trece capturas `v2-interfaz-*.png`, incluida evidencia de uso en pantalla
+  pequeña y de los diálogos integrados.
+
+Validaciones declaradas en el PR: `python manage.py check` sin problemas, `python manage.py
+test` con 190 pruebas ejecutadas y 9 fallos esperados, y búsqueda regex sin llamadas nativas
+a `alert`, `confirm` o `prompt` en HTML/JavaScript.
 
 Las entradas están en orden cronológico y cada línea indica el issue al que pertenece; el archivo
 no tiene secciones por issue, por lo que se localizan con búsqueda (`#3`, `#4`, …) dentro del
