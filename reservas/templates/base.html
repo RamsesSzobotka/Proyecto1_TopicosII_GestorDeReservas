@@ -1,33 +1,110 @@
 <!-- templates/base.html -->
+{% load static %}
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Gestor de Reservas{% endblock %}</title>
-    {% load static %}
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    {% block extra_head %}{% endblock %}
     <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script>
+        // Diálogos de la plataforma (el tema visual está en style.css).
+        function aviso(texto, icono) {
+            return Swal.fire({ icon: icono || 'info', text: texto, confirmButtonText: 'Entendido' });
+        }
+
+        function confirmar(opciones) {
+            return Swal.fire(Object.assign({
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonText: 'Sí, continuar',
+                cancelButtonText: 'Cancelar',
+                reverseButtons: true
+            }, opciones));
+        }
+
+        function pedirNumero(texto, valorInicial, maximo) {
+            return Swal.fire({
+                icon: 'question',
+                text: texto,
+                input: 'number',
+                inputValue: valorInicial,
+                inputAttributes: { min: 0, max: maximo, step: 1 },
+                showCancelButton: true,
+                confirmButtonText: 'Continuar',
+                cancelButtonText: 'Cancelar',
+                reverseButtons: true
+            });
+        }
+
+        // Confirmación genérica para formularios: <form data-confirmar="texto">.
+        document.addEventListener('submit', function (evento) {
+            var form = evento.target;
+            if (!form.dataset || !form.dataset.confirmar) { return; }
+            evento.preventDefault();
+            confirmar({
+                text: form.dataset.confirmar,
+                icon: 'warning',
+                confirmButtonText: form.dataset.confirmarBoton || 'Sí, continuar'
+            }).then(function (respuesta) {
+                // form.submit() no vuelve a disparar este evento.
+                if (respuesta.isConfirmed) { form.submit(); }
+            });
+        });
+    </script>
 </head>
 <body>
-    <!-- NAVBAR -->
-    <nav class="navbar">
-        <div class="container">
-            <h2 class="logo">Gestor de Reservas</h2>
+    <nav class="nav">
+        <div class="nav-inner">
+            <a class="brand" href="{% url 'home' %}">
+                <span class="brand-mark"><i class="bi bi-calendar2-check"></i></span>
+                Gestor de Reservas
+            </a>
             <div class="nav-links">
-                <a href="/">Inicio</a>
+                <a href="{% url 'home' %}"{% if request.resolver_match.url_name == 'home' %} class="is-active"{% endif %}>
+                    <i class="bi bi-house"></i> Inicio
+                </a>
                 {% if user.is_authenticated %}
-                    <span>Hola, {{ user.username }}</span>
-                    <a href="/logout/">Cerrar sesión</a>
+                    <a href="{% url 'mis_reservas' %}"{% if request.resolver_match.url_name == 'mis_reservas' %} class="is-active"{% endif %}>
+                        <i class="bi bi-calendar-week"></i> Mis reservas
+                    </a>
+                    {% if user.is_staff %}
+                    <a href="{% url 'prevision_demanda' %}"{% if request.resolver_match.url_name == 'prevision_demanda' %} class="is-active"{% endif %}>
+                        <i class="bi bi-graph-up"></i> Previsión de demanda
+                    </a>
+                    {% endif %}
+                    <a href="{% url 'perfil' %}"{% if request.resolver_match.url_name == 'perfil' %} class="is-active"{% endif %}>
+                        <i class="bi bi-person-vcard"></i> Mis datos de reserva
+                    </a>
+                    <span class="nav-user"><i class="bi bi-person-circle"></i> {{ user.username }}</span>
+                    <a class="nav-logout" href="{% url 'logout' %}"><i class="bi bi-box-arrow-right"></i> Cerrar sesión</a>
                 {% else %}
-                    <a href="/login/">Iniciar sesión</a>
+                    <a href="{% url 'login' %}"{% if request.resolver_match.url_name == 'login' %} class="is-active"{% endif %}>
+                        <i class="bi bi-box-arrow-in-right"></i> Iniciar sesión
+                    </a>
                 {% endif %}
             </div>
         </div>
     </nav>
 
-    <!-- CONTENIDO -->
+    {% if messages %}
+    <div class="container" style="padding-bottom:0;">
+        {% for message in messages %}
+        <div class="alert {% if message.tags == 'success' %}alert-success{% elif message.tags == 'error' %}alert-danger{% elif message.tags == 'warning' %}alert-warning{% else %}alert-info{% endif %}" role="alert">
+            <i class="bi {% if message.tags == 'success' %}bi-check-circle-fill{% elif message.tags == 'error' %}bi-exclamation-octagon-fill{% elif message.tags == 'warning' %}bi-exclamation-triangle-fill{% else %}bi-info-circle-fill{% endif %}"></i>
+            <div>{{ message }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
     <main>
         {% block content %}{% endblock %}
     </main>
+
+    {% block extra_js %}{% endblock %}
 </body>
 </html>

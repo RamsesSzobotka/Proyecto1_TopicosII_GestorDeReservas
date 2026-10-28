@@ -1,175 +1,70 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Calendario Interactivo - {{ resource.name }}</title>
+{% extends "base.html" %}
+
+{% block title %}Calendario Interactivo - {{ resource.name }}{% endblock %}
+
+{% block extra_head %}
     <link href='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.css' rel='stylesheet' />
     <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js'></script>
+{% endblock %}
 
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding-top: 70px; /* Para que no se tape el contenido por la navbar */
-            background: #f9fafb;
-        }
-        h1 {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        #calendar {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        .leyenda {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 8px 18px;
-            margin: 0 10px 10px;
-            font-size: 0.9rem;
-        }
-        .leyenda .item { display: inline-flex; align-items: center; gap: 6px; }
-        .leyenda .muestra {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border-radius: 3px;
-            border: 1px solid #9ca3af;
-        }
-        .nota-zona {
-            text-align: center;
-            font-size: 0.85rem;
-            color: #4b5563;
-            margin-bottom: 10px;
-        }
-        #btn-refresh {
-            display: block;
-            margin: 20px auto;
-            padding: 10px 20px;
-            background: #2563eb;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 1rem;
-        }
-        #btn-refresh:hover {
-            background: #1e40af;
-        }
-
-        /* === NAVBAR === */
-        .navbar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            background: #2563eb;
-            color: white;
-            padding: 10px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            z-index: 1000;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-
-        .nav-left h2 {
-            margin: 0;
-            font-size: 1.2rem;
-            font-weight: bold;
-        }
-
-        .nav-right a {
-            margin-left: 15px;
-            padding: 6px 12px;
-            text-decoration: none;
-            color: white;
-            border-radius: 5px;
-            transition: background 0.3s ease;
-        }
-
-        .btn-login {
-            background: #10b981; /* Verde login */
-        }
-
-        .btn-login:hover {
-            background: #059669;
-        }
-
-        .btn-logout {
-            background: #ef4444; /* Rojo logout */
-        }
-
-        .btn-logout:hover {
-            background: #dc2626;
-        }
-
-        .user-info {
-            margin-right: 10px;
-            font-weight: 500;
-        }
-    </style>
-</head>
-<body>
-    <!-- NAVBAR -->
-    <nav class="navbar">
-        <div class="nav-left">
-            <h2>Gestor de Reservas</h2>
+{% block content %}
+<div class="container">
+    <header class="page-head" style="display:flex; justify-content:space-between; align-items:flex-end; gap:1rem; flex-wrap:wrap;">
+        <div>
+            <h1>Calendario interactivo</h1>
+            <p>{{ resource.name }}{% if resource.description %} &middot; {{ resource.description }}{% endif %}</p>
         </div>
-        <div class="nav-right">
-            {% if is_authenticated %}
-                <span class="user-info">Hola, {{ user.username }}</span>
-                <a href="/logout/" class="btn-logout">Cerrar Sesión</a>
-            {% else %}
-                <a href="/login/" class="btn-login">Iniciar Sesión</a>
-            {% endif %}
-        </div>
-    </nav>
-
-    <h1>Calendario Interactivo - {{ resource.name }}</h1>
+        <a href="{% url 'home' %}" class="btn btn-outline btn-sm"><i class="bi bi-arrow-left"></i> Volver al inicio</a>
+    </header>
 
     {% if not is_authenticated %}
-    <div style="text-align:center; margin-bottom:20px; color:#b91c1c; font-weight:bold;">
-        ⚠️ Debes <a href="/login/" style="color:#2563eb; text-decoration:underline;">iniciar sesión</a> para crear una reserva.
+    <div class="alert alert-danger">
+        <i class="bi bi-exclamation-triangle-fill"></i>
+        <div>Debes <a href="/login/">iniciar sesión</a> para crear una reserva.</div>
     </div>
     {% endif %}
 
-    <!-- Leyenda de estados -->
-    <div class="leyenda" id="leyenda">
-        <span class="item"><span class="muestra" style="background:#fff;"></span> Disponible (horario 09:00-21:00)</span>
-        <span class="item"><span class="muestra" style="background:#10b981; border-color:#10b981;"></span> Ocupado (reserva)</span>
-        <span class="item"><span class="muestra" style="background:#2563eb; border-color:#2563eb;"></span> Tu reserva</span>
-        <span class="item"><span class="muestra" style="background:#ef4444; border-color:#ef4444;"></span> Bloqueado por el administrador</span>
+    <div class="card" style="padding:1rem;">
+        <div class="legend" id="leyenda">
+            <span class="item"><span class="dot" style="background:#fff;"></span> Disponible (horario 09:00-21:00)</span>
+            <span class="item"><span class="dot" style="background:#10b981; border-color:#10b981;"></span> Ocupado (reserva)</span>
+            <span class="item"><span class="dot" style="background:#2563eb; border-color:#2563eb;"></span> Tu reserva</span>
+            <span class="item"><span class="dot" style="background:#ef4444; border-color:#ef4444;"></span> Bloqueado por el administrador</span>
+        </div>
+        <p class="small muted text-center mb-0" id="nota-zona">Horarios mostrados en tu zona horaria local (<span id="zona-local"></span>)</p>
     </div>
-    <div class="nota-zona" id="nota-zona">Horarios mostrados en tu zona horaria local (<span id="zona-local"></span>)</div>
 
     {% if is_authenticated %}
     {{ reserva_config|json_script:"reserva-config" }}
-    <div style="max-width:1000px; margin:0 auto 20px; padding:10px 14px; background:#eff6ff; border:1px solid #93c5fd; border-radius:8px; font-size:0.95rem;">
-        {% if perfil_completo %}
-            <strong>Datos de reserva guardados:</strong> {{ perfil.resumen }}
-            &mdash; <a href="{% url 'perfil' %}?next={{ request.path|urlencode }}">Cambiar</a>
-        {% else %}
-            Aún no tienes datos de reserva guardados
-            &mdash; <a href="{% url 'perfil' %}?next={{ request.path|urlencode }}">Completar</a>
-        {% endif %}
+    <div class="alert {% if perfil_completo %}alert-success{% else %}alert-warning{% endif %}">
+        <i class="bi {% if perfil_completo %}bi-person-check-fill{% else %}bi-person-exclamation{% endif %}"></i>
+        <div>
+            {% if perfil_completo %}
+                <strong>Datos de reserva guardados:</strong> {{ perfil.resumen }}
+                &mdash; <a href="{% url 'perfil' %}?next={{ request.path|urlencode }}">Cambiar</a>
+            {% else %}
+                Aún no tienes datos de reserva guardados
+                &mdash; <a href="{% url 'perfil' %}?next={{ request.path|urlencode }}">Completar</a>
+            {% endif %}
+        </div>
     </div>
     {% endif %}
 
-    <!-- Botón para actualizar eventos -->
-    <button id="btn-refresh">🔄 Actualizar Reservas y Bloqueos</button>
-    
-    <!-- Contenedor del calendario con data-resource-id y user-logged -->
-    <div id='calendar' 
-         data-resource-id="{{ resource.id }}" 
-         data-user-logged="{{ is_authenticated }}">
+    <div style="display:flex; justify-content:center; margin-bottom:1rem;">
+        <button id="btn-refresh" class="btn btn-outline">
+            <i class="bi bi-arrow-clockwise"></i> Actualizar reservas y bloqueos
+        </button>
     </div>
 
+    <div id='calendar'
+         class="calendar-card"
+         data-resource-id="{{ resource.id }}"
+         data-user-logged="{{ is_authenticated }}">
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             console.log("=== INICIANDO FULLCALENDAR CON BLOQUEOS Y RESERVAS ===");
@@ -204,6 +99,15 @@
                 });
             }
 
+            // Franja legible para los diálogos: "29/10/2026 de 10:00 a 11:00".
+            function formatearFranja(inicio, fin) {
+                const dosDigitos = n => String(n).padStart(2, '0');
+                const fecha = dosDigitos(inicio.getDate()) + '/' +
+                    dosDigitos(inicio.getMonth() + 1) + '/' + inicio.getFullYear();
+                const hora = d => dosDigitos(d.getHours()) + ':' + dosDigitos(d.getMinutes());
+                return fecha + ' de ' + hora(inicio) + ' a ' + hora(fin);
+            }
+
             var calendar = new FullCalendar.Calendar(calendarElement, {
                 initialView: 'timeGridWeek',
                 locale: 'es',
@@ -231,37 +135,43 @@
                     const end = new Date(info.endStr);
 
                     if (isBlocked(start, end)) {
-                        alert("Esta franja horaria está bloqueada por el administrador.");
+                        aviso("Esta franja horaria está bloqueada por el administrador.", 'error');
                         return;
                     }
 
                     if (isReserved(start, end)) {
-                        alert("Ya existe una reserva en esta franja horaria.");
+                        aviso("Ya existe una reserva en esta franja horaria.", 'error');
                         return;
                     }
 
                     if (!userLogged) {
-                        alert("Debes iniciar sesión para crear una reserva.");
+                        aviso("Debes iniciar sesión para crear una reserva.", 'warning');
                         return;
                     }
 
-                    if (confirm(`¿Quieres crear una reserva desde ${info.startStr} hasta ${info.endStr}?`)) {
-                        crearReserva(info.startStr, info.endStr);
-                    }
+                    confirmar({
+                        icon: 'question',
+                        text: `¿Quieres crear una reserva el ${formatearFranja(info.start, info.end)}?`,
+                        confirmButtonText: 'Sí, reservar'
+                    }).then(function(respuesta) {
+                        if (respuesta.isConfirmed) {
+                            crearReserva(info.startStr, info.endStr);
+                        }
+                    });
                 },
                 eventSources: [
     {
         url: '/api/reservas/{{ resource.id }}/',
         method: 'GET',
         failure: function() {
-            alert('Error cargando eventos!');
+            aviso('Error cargando eventos.', 'error');
         }
     },
     {
         url: '{% url 'api_bloqueos' resource.id %}',
         method: 'GET',
         failure: function() {
-            alert('Error cargando bloqueos!');
+            aviso('Error cargando bloqueos.', 'error');
         }
     }
 ]
@@ -271,24 +181,37 @@
             calendar.render();
 
             // === FUNCIÓN CREAR RESERVA CON REPETICIONES ===
-            function crearReserva(start, end) {
+            async function crearReserva(start, end) {
                 const cfg = JSON.parse(document.getElementById('reserva-config').textContent);
                 if (!cfg.perfilCompleto) {
-                    if (confirm("Aún no tienes datos de reserva guardados. ¿Quieres completarlos ahora?")) {
+                    const irAPerfil = await confirmar({
+                        icon: 'info',
+                        text: "Aún no tienes datos de reserva guardados. ¿Quieres completarlos ahora?",
+                        confirmButtonText: 'Completar datos'
+                    });
+                    if (irAPerfil.isConfirmed) {
                         window.location.href = cfg.perfilUrl;
                     }
                     return;
                 }
-                let repeat = prompt("¿Cuántas semanas quieres repetir esta reserva? (0 = solo esta semana)", "0");
-                if (repeat === null) return;
-                repeat = parseInt(repeat);
+
+                const respuesta = await pedirNumero(
+                    "¿Cuántas semanas quieres repetir esta reserva? (0 = solo esta semana)",
+                    0, 52
+                );
+                if (!respuesta.isConfirmed) return;
+                let repeat = parseInt(respuesta.value, 10);
                 if (isNaN(repeat) || repeat < 0) repeat = 0;
                 if (repeat > 52) {
-                    alert("El máximo de repeticiones es 52 semanas.");
+                    await aviso("El máximo de repeticiones es 52 semanas.", 'error');
                     return;
                 }
 
-                if (!confirm(`Se reutilizarán tus datos guardados: ${cfg.resumen}\n(No se usa ni se guarda el número completo de tarjeta.) ¿Continuar?`)) return;
+                const confirmacion = await confirmar({
+                    text: `Se reutilizarán tus datos guardados: ${cfg.resumen} (No se usa ni se guarda el número completo de tarjeta.) ¿Continuar?`,
+                    confirmButtonText: 'Sí, reservar'
+                });
+                if (!confirmacion.isConfirmed) return;
 
                 fetch('/api/reservas/crear/', {
                     method: 'POST',
@@ -311,13 +234,20 @@
                     }
                     return response.json();
                 })
-                .then(data => {
+                .then(async data => {
                     if (data.success) {
-                        alert(`Reserva(s) creada(s) correctamente: ${data.reservas.length} reserva(s).`);
+                        await aviso(`Reserva(s) creada(s) correctamente: ${data.reservas.length} reserva(s).`, 'success');
                     } else {
-                        alert(data.error || 'Error al crear la reserva.');
-                        if (data.perfil_url && confirm('¿Quieres ir a completar tus datos de reserva?')) {
-                            window.location.href = cfg.perfilUrl;
+                        await aviso(data.error || 'Error al crear la reserva.', 'error');
+                        if (data.perfil_url) {
+                            const completar = await confirmar({
+                                icon: 'question',
+                                text: '¿Quieres ir a completar tus datos de reserva?',
+                                confirmButtonText: 'Completar datos'
+                            });
+                            if (completar.isConfirmed) {
+                                window.location.href = cfg.perfilUrl;
+                            }
                         }
                     }
                     // Exito o rechazo: se recarga para mostrar el estado real del servidor.
@@ -325,8 +255,8 @@
                 })
                 .catch(error => {
                     console.error('Error:', error);
-                    alert('No se pudo contactar con el servidor. Inténtalo de nuevo.');
-                    calendar.refetchEvents();
+                    aviso('No se pudo contactar con el servidor. Inténtalo de nuevo.', 'error')
+                        .then(function() { calendar.refetchEvents(); });
                 });
             }
 
@@ -355,5 +285,4 @@
             }
         });
     </script>
-</body>
-</html>
+{% endblock %}

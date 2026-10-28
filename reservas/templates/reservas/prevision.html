@@ -1,164 +1,166 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Gestor de Reservas - Previsión de demanda</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-</head>
-<body class="bg-gray-100">
+{% extends "base.html" %}
 
-    <nav class="bg-blue-600 text-white p-4 flex justify-between">
-        <h1 class="text-xl font-bold">Gestor de Reservas</h1>
-        <div>
-            <a href="{% url 'home' %}" class="bg-blue-800 px-3 py-1 rounded hover:bg-blue-900 mr-2">Inicio</a>
-            <span class="mr-4">Hola, {{ user.username }}</span>
-            <a href="{% url 'logout' %}" class="bg-red-500 px-3 py-1 rounded hover:bg-red-600">Cerrar Sesión</a>
-        </div>
-    </nav>
+{% block title %}Gestor de Reservas - Previsión de demanda{% endblock %}
 
-    <div class="max-w-5xl mx-auto mt-8 px-4 pb-10">
-        <h2 class="text-2xl font-bold mb-2">Previsión de demanda</h2>
-        <p class="bg-yellow-100 border border-yellow-300 text-yellow-900 rounded p-3 mb-6">
-            Esta previsión es una estimación basada en el histórico; no modifica precios ni inventario.
-        </p>
+{% block content %}
+<div class="container">
+    <header class="page-head">
+        <h1>Previsión de demanda</h1>
+        <p>Histórico de reservas y estimación de las próximas semanas.</p>
+    </header>
 
-        <form method="get" action="{% url 'prevision_demanda' %}" class="bg-white rounded-lg shadow-md p-4 mb-6 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-            <div>
-                <label for="recurso" class="block text-sm font-semibold mb-1">Recurso</label>
-                <select id="recurso" name="recurso" class="w-full border rounded p-2">
+    <div class="alert alert-warning">
+        <i class="bi bi-info-circle"></i>
+        <div>Esta previsión es una estimación basada en el histórico; no modifica precios ni inventario.</div>
+    </div>
+
+    <form method="get" action="{% url 'prevision_demanda' %}" class="card">
+        <div class="form-row">
+            <div class="field mb-0">
+                <label for="recurso">Recurso</label>
+                <select id="recurso" name="recurso">
                     <option value="">Elige un recurso</option>
                     {% for r in recursos %}
                     <option value="{{ r.id }}" {% if r.id|stringformat:"s" == recurso_id %}selected{% endif %}>{{ r.name }}</option>
                     {% endfor %}
                 </select>
             </div>
-            <div>
-                <label for="desde" class="block text-sm font-semibold mb-1">Desde (incluida)</label>
-                <input id="desde" name="desde" type="date" value="{{ desde }}" class="w-full border rounded p-2">
+            <div class="field mb-0">
+                <label for="desde">Desde (incluida)</label>
+                <input id="desde" name="desde" type="date" value="{{ desde }}">
             </div>
-            <div>
-                <label for="hasta" class="block text-sm font-semibold mb-1">Hasta (excluida)</label>
-                <input id="hasta" name="hasta" type="date" value="{{ hasta }}" class="w-full border rounded p-2">
+            <div class="field mb-0">
+                <label for="hasta">Hasta (excluida)</label>
+                <input id="hasta" name="hasta" type="date" value="{{ hasta }}">
             </div>
-            <div>
-                <button type="submit" class="w-full bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Ver previsión</button>
+            <div class="field mb-0">
+                <button type="submit" class="btn btn-block">
+                    <i class="bi bi-bar-chart-line"></i> Ver previsión
+                </button>
             </div>
-        </form>
+        </div>
+    </form>
 
-        {% if error %}
-        <div role="alert" class="bg-red-100 border border-red-300 text-red-800 rounded p-4 mb-6">{{ error }}</div>
-        {% elif not recurso %}
-        <div class="bg-white rounded-lg shadow-md p-6 text-center text-gray-600">
-            Elige un recurso y un rango de fechas para ver su histórico de reservas y la estimación de las semanas siguientes.
+    {% if error %}
+    <div role="alert" class="alert alert-danger">{{ error }}</div>
+    {% elif not recurso %}
+    <div class="card empty">
+        <i class="bi bi-graph-up"></i>
+        Elige un recurso y un rango de fechas para ver su histórico de reservas y la estimación de las semanas siguientes.
+    </div>
+    {% else %}
+    <div class="card">
+        <div class="card-head">
+            <h2 class="mb-0">{{ recurso.name }}: {{ desde }} a {{ hasta }}</h2>
+        </div>
+        <p class="small muted">
+            Las semanas empiezan el lunes (UTC). Las semanas que no caben completas en el rango se muestran como parciales y no entran en el promedio.
+        </p>
+
+        {% if not resultado.suficiente %}
+        <div class="alert" data-estado="sin-prevision">
+            <i class="bi bi-exclamation-circle"></i>
+            <div>
+                <strong>No se puede estimar la demanda.</strong>
+                <div>{{ resultado.motivo }}</div>
+            </div>
         </div>
         {% else %}
-        <div class="bg-white rounded-lg shadow-md p-6">
-            <h3 class="text-lg font-semibold mb-1">{{ recurso.name }}: {{ desde }} a {{ hasta }}</h3>
-            <p class="text-sm text-gray-600 mb-4">
-                Las semanas empiezan el lunes (UTC). Las semanas que no caben completas en el rango se muestran como parciales y no entran en el promedio.
-            </p>
-
-            {% if not resultado.suficiente %}
-            <div class="bg-gray-50 border border-gray-300 rounded p-4 mb-4" data-estado="sin-prevision">
-                <p class="font-semibold">No se puede estimar la demanda.</p>
-                <p>{{ resultado.motivo }}</p>
-            </div>
-            {% else %}
-            <p class="mb-4" data-estado="con-prevision">
+        <div class="alert alert-info" data-estado="con-prevision">
+            <i class="bi bi-calculator"></i>
+            <div>
                 Estimación: media móvil simple de las últimas {{ ventana }} semanas completas, proyectada a {{ horizonte }} semanas
                 (valor constante para cada semana futura).
-            </p>
-            {% endif %}
-
-            <div style="position: relative; height: 380px;">
-                <canvas id="grafico" role="img" aria-label="Reservas por semana de {{ recurso.name }}, histórico y previsión"></canvas>
-            </div>
-
-            <div class="overflow-x-auto mt-6">
-                <table class="min-w-full text-sm">
-                    <thead>
-                        <tr class="border-b text-left">
-                            <th class="py-2 pr-4">Semana (lunes)</th>
-                            <th class="py-2 pr-4">Reservas</th>
-                            <th class="py-2 pr-4">Horas reservadas</th>
-                            <th class="py-2">Tipo</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for s in semanas %}
-                        <tr class="border-b">
-                            <td class="py-1 pr-4">{{ s.inicio|date:"Y-m-d" }}</td>
-                            <td class="py-1 pr-4">{{ s.reservas }}</td>
-                            <td class="py-1 pr-4">{{ s.horas }}</td>
-                            <td class="py-1">{% if s.completa %}Histórico{% else %}Histórico (semana parcial){% endif %}</td>
-                        </tr>
-                        {% endfor %}
-                        {% for p in resultado.prevision %}
-                        <tr class="border-b bg-blue-50">
-                            <td class="py-1 pr-4">{{ p.inicio|date:"Y-m-d" }}</td>
-                            <td class="py-1 pr-4">{{ p.reservas }}</td>
-                            <td class="py-1 pr-4">{{ p.horas }}</td>
-                            <td class="py-1">Estimación</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
             </div>
         </div>
-        {{ datos|json_script:"datos-prevision" }}
-        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-        <script>
-            (function () {
-                if (typeof Chart === 'undefined') { return; }
-                var datos = JSON.parse(document.getElementById('datos-prevision').textContent);
-                var hist = datos.historico, prev = datos.prevision;
-                var etiquetas = hist.map(function (s) { return s.inicio + (s.completa ? '' : ' (parcial)'); })
-                    .concat(prev.map(function (s) { return s.inicio; }));
-                var relleno = function (n) { return new Array(n).fill(null); };
-                var datasets = [
-                    {
-                        type: 'bar', label: 'Reservas por semana (histórico)',
-                        data: hist.map(function (s) { return s.reservas; }).concat(relleno(prev.length)),
-                        backgroundColor: 'rgba(59, 130, 246, 0.6)', yAxisID: 'y'
-                    },
-                    {
-                        type: 'line', label: 'Horas reservadas (histórico)',
-                        data: hist.map(function (s) { return s.horas; }).concat(relleno(prev.length)),
-                        borderColor: '#059669', backgroundColor: '#059669', yAxisID: 'y1', tension: 0
-                    }
-                ];
-                if (datos.suficiente) {
-                    datasets.push({
-                        type: 'line', label: 'Reservas por semana (previsión)',
-                        data: relleno(hist.length).concat(prev.map(function (s) { return s.reservas; })),
-                        borderColor: '#dc2626', backgroundColor: '#dc2626', borderDash: [8, 4], yAxisID: 'y', tension: 0
-                    });
-                    datasets.push({
-                        type: 'line', label: 'Horas reservadas (previsión)',
-                        data: relleno(hist.length).concat(prev.map(function (s) { return s.horas; })),
-                        borderColor: '#d97706', backgroundColor: '#d97706', borderDash: [3, 3], yAxisID: 'y1', tension: 0
-                    });
-                }
-                new Chart(document.getElementById('grafico'), {
-                    data: { labels: etiquetas, datasets: datasets },
-                    options: {
-                        responsive: true, maintainAspectRatio: false,
-                        plugins: {
-                            title: { display: true, text: datos.recurso + ': ' + datos.desde + ' a ' + datos.hasta },
-                            legend: { position: 'bottom' }
-                        },
-                        scales: {
-                            x: { title: { display: true, text: 'Semana (inicio en lunes)' } },
-                            y: { beginAtZero: true, position: 'left', title: { display: true, text: 'reservas por semana' } },
-                            y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'horas' } }
-                        }
-                    }
-                });
-            })();
-        </script>
         {% endif %}
-    </div>
 
-</body>
-</html>
+        <div style="position: relative; height: 380px;">
+            <canvas id="grafico" role="img" aria-label="Reservas por semana de {{ recurso.name }}, histórico y previsión"></canvas>
+        </div>
+
+        <div class="table-wrap mt-2">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Semana (lunes)</th>
+                        <th>Reservas</th>
+                        <th>Horas reservadas</th>
+                        <th>Tipo</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in semanas %}
+                    <tr>
+                        <td>{{ s.inicio|date:"Y-m-d" }}</td>
+                        <td>{{ s.reservas }}</td>
+                        <td>{{ s.horas }}</td>
+                        <td>{% if s.completa %}Histórico{% else %}Histórico (semana parcial){% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                    {% for p in resultado.prevision %}
+                    <tr class="is-estimacion">
+                        <td>{{ p.inicio|date:"Y-m-d" }}</td>
+                        <td>{{ p.reservas }}</td>
+                        <td>{{ p.horas }}</td>
+                        <td>Estimación</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {{ datos|json_script:"datos-prevision" }}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script>
+        (function () {
+            if (typeof Chart === 'undefined') { return; }
+            var datos = JSON.parse(document.getElementById('datos-prevision').textContent);
+            var hist = datos.historico, prev = datos.prevision;
+            var etiquetas = hist.map(function (s) { return s.inicio + (s.completa ? '' : ' (parcial)'); })
+                .concat(prev.map(function (s) { return s.inicio; }));
+            var relleno = function (n) { return new Array(n).fill(null); };
+            var datasets = [
+                {
+                    type: 'bar', label: 'Reservas por semana (histórico)',
+                    data: hist.map(function (s) { return s.reservas; }).concat(relleno(prev.length)),
+                    backgroundColor: 'rgba(37, 99, 235, 0.55)', yAxisID: 'y'
+                },
+                {
+                    type: 'line', label: 'Horas reservadas (histórico)',
+                    data: hist.map(function (s) { return s.horas; }).concat(relleno(prev.length)),
+                    borderColor: '#059669', backgroundColor: '#059669', yAxisID: 'y1', tension: 0
+                }
+            ];
+            if (datos.suficiente) {
+                datasets.push({
+                    type: 'line', label: 'Reservas por semana (previsión)',
+                    data: relleno(hist.length).concat(prev.map(function (s) { return s.reservas; })),
+                    borderColor: '#dc2626', backgroundColor: '#dc2626', borderDash: [8, 4], yAxisID: 'y', tension: 0
+                });
+                datasets.push({
+                    type: 'line', label: 'Horas reservadas (previsión)',
+                    data: relleno(hist.length).concat(prev.map(function (s) { return s.horas; })),
+                    borderColor: '#d97706', backgroundColor: '#d97706', borderDash: [3, 3], yAxisID: 'y1', tension: 0
+                });
+            }
+            new Chart(document.getElementById('grafico'), {
+                data: { labels: etiquetas, datasets: datasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {
+                        title: { display: true, text: datos.recurso + ': ' + datos.desde + ' a ' + datos.hasta },
+                        legend: { position: 'bottom' }
+                    },
+                    scales: {
+                        x: { title: { display: true, text: 'Semana (inicio en lunes)' } },
+                        y: { beginAtZero: true, position: 'left', title: { display: true, text: 'reservas por semana' } },
+                        y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'horas' } }
+                    }
+                }
+            });
+        })();
+    </script>
+    {% endif %}
+</div>
+{% endblock %}
