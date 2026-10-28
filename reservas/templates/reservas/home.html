@@ -1,49 +1,30 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Gestor de Reservas - Inicio</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-</head>
-<body class="bg-gray-100">
+{% extends "base.html" %}
 
-    <!-- NAVBAR -->
-    <nav class="bg-blue-600 text-white p-4 flex justify-between">
-        <h1 class="text-xl font-bold">Gestor de Reservas</h1>
-        <div>
-            {% if user.is_authenticated %}
-                <span class="mr-4">Hola, {{ user.username }}</span>
-                <a href="{% url 'mis_reservas' %}" class="bg-blue-800 px-3 py-1 rounded hover:bg-blue-900 mr-2">Mis reservas</a>
-                <a href="{% url 'perfil' %}" class="bg-blue-800 px-3 py-1 rounded hover:bg-blue-900 mr-2">Mis datos de reserva</a>
-                {% if user.is_staff %}
-                <a href="{% url 'prevision_demanda' %}" class="bg-blue-800 px-3 py-1 rounded hover:bg-blue-900 mr-2">Previsión de demanda</a>
-                {% endif %}
-                <a href="{% url 'logout' %}" class="bg-red-500 px-3 py-1 rounded hover:bg-red-600">Cerrar Sesión</a>
-            {% else %}
-                <a href="{% url 'login' %}" class="bg-green-500 px-3 py-1 rounded hover:bg-green-600">Iniciar Sesión</a>
-            {% endif %}
+{% block title %}Gestor de Reservas - Inicio{% endblock %}
+
+{% block content %}
+<div class="container">
+    <header class="page-head">
+        <h1>Reserva tu pista</h1>
+        <p>Elige una pista para ver su calendario y reservar la franja que necesites.</p>
+    </header>
+
+    <div class="grid">
+        {% for resource in resources %}
+        <article class="tile">
+            <span class="tile-icon"><i class="bi bi-geo-alt-fill"></i></span>
+            <h3>{{ resource.name }}</h3>
+            <p>{{ resource.description|default:"Pista disponible." }}</p>
+            <a href="{% url 'calendario_full' resource.id %}" class="btn">
+                <i class="bi bi-calendar3"></i> Ver calendario
+            </a>
+        </article>
+        {% empty %}
+        <div class="card empty" style="grid-column: 1 / -1;">
+            <i class="bi bi-inboxes"></i>
+            No hay pistas disponibles.
         </div>
-    </nav>
-
-    <!-- CONTENIDO -->
-    <div class="max-w-5xl mx-auto mt-8 px-4">
-        <h2 class="text-2xl font-bold text-center mb-6">Elige una pista para ver su calendario</h2>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {% for resource in resources %}
-            <div class="bg-white rounded-lg shadow-md p-6 text-center transition-transform transform hover:scale-105 hover:shadow-lg">
-                <h3 class="text-lg font-semibold mb-2">{{ resource.name }}</h3>
-                <p class="text-gray-600 mb-4">{{ resource.description|default:"Pista disponible." }}</p>
-                <a href="{% url 'calendario_full' resource.id %}" 
-                   class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors duration-300">
-                    Ver Calendario
-                </a>
-            </div>
-            {% empty %}
-            <p class="col-span-full text-center text-gray-500">No hay pistas disponibles.</p>
-            {% endfor %}
-        </div>
+        {% endfor %}
     </div>
-
-</body>
-</html>
+</div>
+{% endblock %}

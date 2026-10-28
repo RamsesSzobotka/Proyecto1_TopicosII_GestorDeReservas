@@ -1,119 +1,130 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Gestor de Reservas - Mis reservas</title>
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-</head>
-<body class="bg-gray-100">
+{% extends "base.html" %}
 
-    <nav class="bg-blue-600 text-white p-4 flex justify-between">
-        <h1 class="text-xl font-bold">Gestor de Reservas</h1>
+{% block title %}Gestor de Reservas - Mis reservas{% endblock %}
+
+{% block content %}
+<div class="container">
+    <header class="page-head">
+        <h1>Mis reservas</h1>
+        <p>Consulta, y cancela cuando aún estés a tiempo.</p>
+    </header>
+
+    <div class="alert alert-warning">
+        <i class="bi bi-clock-history"></i>
         <div>
-            <a href="{% url 'home' %}" class="bg-blue-800 px-3 py-1 rounded hover:bg-blue-900 mr-2">Inicio</a>
-            <span class="mr-4">Hola, {{ user.username }}</span>
-            <a href="{% url 'logout' %}" class="bg-red-500 px-3 py-1 rounded hover:bg-red-600">Cerrar Sesión</a>
-        </div>
-    </nav>
-
-    <div class="max-w-5xl mx-auto mt-8 px-4 pb-10">
-        <h2 class="text-2xl font-bold mb-2">Mis reservas</h2>
-
-        <p class="bg-yellow-100 border border-yellow-300 text-yellow-900 rounded p-3 mb-6">
             Puedes cancelar una reserva hasta {{ limite_horas }} horas antes de su inicio. Las reservas que ya empezaron
             o ya pasaron no se pueden cancelar. Las horas se muestran en UTC.
-        </p>
+        </div>
+    </div>
 
-        {% if messages %}
-        {% for message in messages %}
-        <div role="alert" class="{% if message.tags == 'error' %}bg-red-100 border-red-300 text-red-800{% else %}bg-green-100 border-green-300 text-green-800{% endif %} border rounded p-4 mb-4">{{ message }}</div>
-        {% endfor %}
-        {% endif %}
-
-        <h3 class="text-lg font-semibold mb-2">Próximas reservas</h3>
-        {% if proximas %}
-        <div class="bg-white rounded-lg shadow-md overflow-x-auto mb-8">
-            <table class="w-full text-left">
-                <thead>
-                    <tr class="border-b">
-                        <th class="p-3">Recurso</th>
-                        <th class="p-3">Fecha</th>
-                        <th class="p-3">Hora</th>
-                        <th class="p-3">Estado</th>
-                        <th class="p-3">Serie</th>
-                        <th class="p-3">Acción</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for r in proximas %}
-                    <tr class="border-b align-top">
-                        <td class="p-3">{{ r.resource.name }}</td>
-                        <td class="p-3">{{ r.start_time|date:"d/m/Y" }}</td>
-                        <td class="p-3">{{ r.start_time|date:"H:i" }} - {{ r.end_time|date:"H:i" }}</td>
-                        <td class="p-3">{% if r.en_curso %}En curso{% else %}{{ r.get_estado_display }}{% endif %}</td>
-                        <td class="p-3">{% if r.serie %}Serie: ocurrencia {{ r.serie_n }} de {{ r.serie_m }}{% else %}Reserva única{% endif %}</td>
-                        <td class="p-3">
-                            {% if r.cancelable %}
-                            <form method="post" action="{% url 'cancelar_reserva' r.pk %}" class="mb-1"
-                                  onsubmit="return confirm('¿Cancelar esta reserva?');">
+    <h2 style="margin-top:1.75rem;">Próximas reservas</h2>
+    {% if proximas %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Recurso</th>
+                    <th>Fecha</th>
+                    <th>Hora</th>
+                    <th>Estado</th>
+                    <th>Serie</th>
+                    <th>Acción</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in proximas %}
+                <tr>
+                    <td>{{ r.resource.name }}</td>
+                    <td>{{ r.start_time|date:"d/m/Y" }}</td>
+                    <td>{{ r.start_time|date:"H:i" }} - {{ r.end_time|date:"H:i" }}</td>
+                    <td>
+                        {% if r.en_curso %}
+                        <span class="badge badge-warn"><i class="bi bi-hourglass-split"></i> En curso</span>
+                        {% elif r.estado == 'cancelada' %}
+                        <span class="badge badge-off"><i class="bi bi-x-circle"></i> {{ r.get_estado_display }}</span>
+                        {% else %}
+                        <span class="badge badge-ok"><i class="bi bi-check-circle"></i> {{ r.get_estado_display }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="muted">
+                        {% if r.serie %}Serie: ocurrencia {{ r.serie_n }} de {{ r.serie_m }}{% else %}Reserva única{% endif %}
+                    </td>
+                    <td>
+                        {% if r.cancelable %}
+                        <div class="stack-actions">
+                            <form method="post" action="{% url 'cancelar_reserva' r.pk %}"
+                                  data-confirmar="¿Cancelar esta reserva?" data-confirmar-boton="Sí, cancelar">
                                 {% csrf_token %}
                                 <input type="hidden" name="alcance" value="una">
-                                <button type="submit" class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">
+                                <button type="submit" class="btn btn-danger btn-sm">
+                                    <i class="bi bi-x-lg"></i>
                                     {% if r.serie %}Cancelar solo esta{% else %}Cancelar{% endif %}
                                 </button>
                             </form>
                             {% if r.serie %}
                             <form method="post" action="{% url 'cancelar_reserva' r.pk %}"
-                                  onsubmit="return confirm('¿Cancelar esta reserva y las siguientes de la serie que cumplan el límite?');">
+                                  data-confirmar="¿Cancelar esta reserva y las siguientes de la serie que cumplan el límite?" data-confirmar-boton="Sí, cancelar">
                                 {% csrf_token %}
                                 <input type="hidden" name="alcance" value="serie">
-                                <button type="submit" class="bg-red-700 text-white px-3 py-1 rounded hover:bg-red-800">Cancelar esta y las siguientes</button>
+                                <button type="submit" class="btn btn-outline btn-sm">Cancelar esta y las siguientes</button>
                             </form>
                             {% endif %}
-                            {% else %}
-                            <span class="text-sm text-gray-600">{{ r.motivo_no_cancelable }}</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="bg-white rounded-lg shadow-md p-6 text-center text-gray-600 mb-8">No tienes reservas próximas.</div>
-        {% endif %}
-
-        <h3 class="text-lg font-semibold mb-2">Historial</h3>
-        {% if historial %}
-        <div class="bg-white rounded-lg shadow-md overflow-x-auto">
-            <table class="w-full text-left">
-                <thead>
-                    <tr class="border-b">
-                        <th class="p-3">Recurso</th>
-                        <th class="p-3">Fecha</th>
-                        <th class="p-3">Hora</th>
-                        <th class="p-3">Estado</th>
-                        <th class="p-3">Serie</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for r in historial %}
-                    <tr class="border-b">
-                        <td class="p-3">{{ r.resource.name }}</td>
-                        <td class="p-3">{{ r.start_time|date:"d/m/Y" }}</td>
-                        <td class="p-3">{{ r.start_time|date:"H:i" }} - {{ r.end_time|date:"H:i" }}</td>
-                        <td class="p-3">{% if r.estado == 'cancelada' %}Cancelada{% else %}Pasada{% endif %}</td>
-                        <td class="p-3">{% if r.serie %}Serie: ocurrencia {{ r.serie_n }} de {{ r.serie_m }}{% else %}Reserva única{% endif %}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="bg-white rounded-lg shadow-md p-6 text-center text-gray-600">Todavía no tienes historial de reservas.</div>
-        {% endif %}
+                        </div>
+                        {% else %}
+                        <span class="small muted">{{ r.motivo_no_cancelable }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
+    {% else %}
+    <div class="card empty">
+        <i class="bi bi-calendar-x"></i>
+        No tienes reservas próximas.
+    </div>
+    {% endif %}
 
-</body>
-</html>
+    <h2 style="margin-top:1.75rem;">Historial</h2>
+    {% if historial %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Recurso</th>
+                    <th>Fecha</th>
+                    <th>Hora</th>
+                    <th>Estado</th>
+                    <th>Serie</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in historial %}
+                <tr>
+                    <td>{{ r.resource.name }}</td>
+                    <td>{{ r.start_time|date:"d/m/Y" }}</td>
+                    <td>{{ r.start_time|date:"H:i" }} - {{ r.end_time|date:"H:i" }}</td>
+                    <td>
+                        {% if r.estado == 'cancelada' %}
+                        <span class="badge badge-off"><i class="bi bi-x-circle"></i> Cancelada</span>
+                        {% else %}
+                        <span class="badge"><i class="bi bi-clock"></i> Pasada</span>
+                        {% endif %}
+                    </td>
+                    <td class="muted">
+                        {% if r.serie %}Serie: ocurrencia {{ r.serie_n }} de {{ r.serie_m }}{% else %}Reserva única{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card empty">
+        <i class="bi bi-journal"></i>
+        Todavía no tienes historial de reservas.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,37 +1,34 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Iniciar Sesión</title>
-    <style>
-        body { font-family: Arial, sans-serif; background: #f4f4f4; }
-        .login-container {
-            max-width: 400px; margin: 50px auto; padding: 20px;
-            background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        h2 { text-align: center; color: #333; }
-        input { width: 100%; padding: 10px; margin: 10px 0; }
-        button { width: 100%; padding: 10px; background: #2563eb; color: white; border: none; border-radius: 5px; }
-        button:hover { background: #1e40af; }
-        .error { color: red; text-align: center; }
-    </style>
-</head>
-<body>
-    <div class="login-container">
-        <h2>Iniciar Sesión</h2>
-        {% if messages %}
-            <div class="error">
-                {% for message in messages %}
-                    <p>{{ message }}</p>
-                {% endfor %}
-            </div>
-        {% endif %}
+{% extends "base.html" %}
+
+{% block title %}Iniciar Sesión{% endblock %}
+
+{% block content %}
+<div class="auth-shell">
+    <div class="auth-card">
+        <div class="text-center" style="font-size:1.6rem; color:var(--primary); margin-bottom:.4rem;">
+            <i class="bi bi-shield-lock"></i>
+        </div>
+        <h2 class="auth-title">Iniciar sesión</h2>
+        <p class="auth-sub">Accede para reservar y gestionar tus pistas.</p>
+
         <form method="post">
             {% csrf_token %}
-            <input type="text" name="username" placeholder="Usuario" required>
-            <input type="password" name="password" placeholder="Contraseña" required>
-            <button type="submit">Entrar</button>
+            <div class="field">
+                <label for="username">Usuario</label>
+                <input id="username" type="text" name="username" placeholder="Tu usuario" autocomplete="username" required>
+            </div>
+            <div class="field">
+                <label for="password">Contraseña</label>
+                <input id="password" type="password" name="password" placeholder="Tu contraseña" autocomplete="current-password" required>
+            </div>
+            <button type="submit" class="btn btn-block">
+                <i class="bi bi-box-arrow-in-right"></i> Entrar
+            </button>
         </form>
+
+        <p class="small muted text-center mt-1 mb-0">
+            <a href="{% url 'home' %}"><i class="bi bi-arrow-left"></i> Volver al inicio</a>
+        </p>
     </div>
-</body>
-</html>
+</div>
+{% endblock %}
